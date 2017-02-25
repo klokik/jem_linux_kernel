@@ -6,6 +6,7 @@ obj-$(CONFIG_DRM_OMAP_CONNECTOR_HDMI) += connector-hdmi.o
 obj-$(CONFIG_DRM_OMAP_CONNECTOR_ANALOG_TV) += connector-analog-tv.o
 obj-$(CONFIG_DRM_OMAP_PANEL_DPI) += panel-dpi.o
 obj-$(CONFIG_DRM_OMAP_PANEL_DSI_CM) += panel-dsi-cm.o
+obj-$(CONFIG_DRM_OMAP_PANEL_NT71391) += panel-nt71391.o
 obj-$(CONFIG_DRM_OMAP_PANEL_SONY_ACX565AKM) += panel-sony-acx565akm.o
 obj-$(CONFIG_DRM_OMAP_PANEL_LGPHILIPS_LB035Q02) += panel-lgphilips-lb035q02.o
 obj-$(CONFIG_DRM_OMAP_PANEL_SHARP_LS037V7DW01) += panel-sharp-ls037v7dw01.o
