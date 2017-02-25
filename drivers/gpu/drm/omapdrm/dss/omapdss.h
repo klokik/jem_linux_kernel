@@ -612,6 +612,7 @@ struct omapdss_dsi_ops {
 			u8 *data, int len);
 
 	int (*bta_sync)(struct omap_dss_device *dssdev, int channel);
+	int (*turn_on_periph)(struct omap_dss_device *dssdev, int channel);
 
 	int (*set_max_rx_packet_size)(struct omap_dss_device *dssdev,
 			int channel, u16 plen);

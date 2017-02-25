@@ -2790,6 +2790,13 @@ static int dsi_vc_send_null(struct omap_dss_device *dssdev, int channel)
 		0, 0);
 }
 
+static int dsi_vc_send_turn_on_periph(struct omap_dss_device *dssdev, int channel)
+{
+	struct platform_device *dsidev = dsi_get_dsidev_from_dssdev(dssdev);
+
+	return dsi_vc_send_short(dsidev, channel, MIPI_DSI_TURN_ON_PERIPHERAL, 0, 0);
+}
+
 static int dsi_vc_write_nosync_common(struct platform_device *dsidev,
 		int channel, u8 *data, int len, enum dss_dsi_content_type type)
 {
@@ -4842,6 +4849,26 @@ static int dsi_set_config(struct omap_dss_device *dssdev,
 	dsi->vm = ctx.vm;
 	dsi->vm_timings = ctx.dsi_vm;
 
+#if defined(CONFIG_DRM_OMAP_PANEL_NT71391)
+	dsi->vm_timings = (struct omap_dss_dsi_videomode_timings){
+		.hsa				= 0,
+		.hfp				= 27,
+		.hbp				= 6,
+		.vsa				= 1,
+		.vfp				= 10,
+		.vbp				= 9,
+		.hact				= 1920,
+		.vact				= 1200,
+		.blanking_mode		= 1,
+		.hsa_blanking_mode	= 1,
+		.hbp_blanking_mode	= 1,
+		.hfp_blanking_mode	= 1,
+		.trans_mode = OMAP_DSS_DSI_BURST_MODE,
+		.ddr_clk_always_on	= 0,
+		.window_sync		= 4,
+	};
+#endif
+
 	mutex_unlock(&dsi->lock);
 
 	return 0;
@@ -5050,6 +5077,7 @@ static const struct omapdss_dsi_ops dsi_ops = {
 	.gen_read = dsi_vc_generic_read,
 
 	.bta_sync = dsi_vc_send_bta_sync,
+	.turn_on_periph = dsi_vc_send_turn_on_periph,
 
 	.set_max_rx_packet_size = dsi_vc_set_max_rx_packet_size,
 };
