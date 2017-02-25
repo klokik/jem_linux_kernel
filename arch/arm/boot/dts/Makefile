@@ -580,6 +580,7 @@ dtb-$(CONFIG_SOC_AM33XX) += \
 dtb-$(CONFIG_ARCH_OMAP4) += \
 	omap4-droid4-xt894.dtb \
 	omap4-duovero-parlor.dtb \
+	omap4-jem.dtb \
 	omap4-kc1.dtb \
 	omap4-panda.dtb \
 	omap4-panda-a4.dtb \

@@ -1,0 +1,836 @@
+/*
+ *
+ * Author: Mykola Dolhyi <0xb000@gmail.com>
+ *
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ */
+/dts-v1/;
+
+#include "omap4470.dtsi"
+#include "elpida_ecb240abacn.dtsi"
+
+/ {
+	model = "KF OMAP4 Jem Tablet";
+	compatible = "amazon,jem", "ti,omap4460", "ti,omap4";
+
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x80000000 0x40000000>; /* 1 GB */
+	};
+
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		dsp_cma_pool: dsp_cma@98000000 {
+			compatible = "shared-dma-pool";
+			reg = <0x98000000 0x800000>;
+			reusable;
+			status = "okay";
+		};
+
+		ipu_cma_pool: ipu_cma@98800000 {
+			compatible = "shared-dma-pool";
+			reg = <0x98800000 0x7000000>;
+			reusable;
+			status = "okay";
+		};
+	};
+
+	gpio_keys {
+		compatible = "gpio-keys";
+
+// XXX: breaks emmc, check pinmux
+//		pinctrl-names = "default";
+//		pinctrl-0 = <&gpio_keys_pins>;
+
+		volume_up {
+			label = "volume-up";
+			linux,code = <115>;	/* KEY_VOLUMEUP */
+			gpios = <&gpio1 1 GPIO_ACTIVE_LOW>;	/* 1 GPIO_WK1 ?? */
+			gpio-key,wakeup;
+		};
+		volume_down {
+			label = "volume-down";
+			linux,code = <114>;	/* KEY_VOLUMEDOWN */
+			gpios = <&gpio2 18 GPIO_ACTIVE_LOW>;	/* GPIO_50 */
+			gpio-key,wakeup;
+		};
+	};
+
+	rfkill_wifi {
+		status = "disabled";
+		compatible = "rfkill-gpio";
+		rfkill-name = "bcm43239";
+		rfkill-type = "wlan";
+		shutdown-gpios = <&gpio2 11 GPIO_ACTIVE_HIGH>; 	// wlan_en
+	};
+
+	rfkill_bt {
+		compatible = "rfkill-gpio";
+		rfkill-name = "bcm2076";
+		rfkill-type = "bluetooth";
+		reset-gpios = <&gpio2 21 GPIO_ACTIVE_HIGH>; 	// reset_n
+		shutdown-gpios = <&gpio2 14 GPIO_ACTIVE_HIGH>; 	// reg_en
+	};
+
+	bcm2076-bt {
+		compatible = "bcm2076";
+
+		// pinctrl-names = "default";
+		// pinctrl-0 = <&bt_pins>;
+
+		// shutdown-gpios = <&gpio2 14 GPIO_ACTIVE_HIGH>;
+		// reset-gpios = <&gpio2 21 GPIO_ACTIVE_HIGH>;
+		device-wakeup-gpios = <&gpio2 17 GPIO_ACTIVE_HIGH>;
+		// TODO: define as irq
+		host-wakeup-gpios = <&gpio4 18 GPIO_ACTIVE_HIGH>;
+
+		init-speed = <115200>;
+	};
+
+	sound {
+		compatible = "ti,omap-wm8962";
+		model = "wm8962-audio";
+		ssi-controller = <&mcbsp2>;
+		audio-codec = <&codec>;
+		audio-routing =
+			"Headphone Jack", "HPOUTL",
+			"Headphone Jack", "HPOUTR",
+			"Ext Spk", "SPKOUTL",
+			"Ext Spk", "SPKOUTR",
+			"AMIC", "MICBIAS",
+			"IN3R", "AMIC";
+	};
+
+	/* backlight PWM */
+	pwm10: dmtimer-pwm@10 {
+		status = "okay";
+		compatible = "ti,omap-dmtimer-pwm";
+		ti,timers = <&timer10>;
+		ti,prescaler = <0>; /* use ti,clock-source in newer kernels */
+		#pwm-cells = <3>;
+	};
+
+	lcd0_bl: backlight {
+		status = "okay";
+		compatible = "pwm-backlight";
+		pwms = <&pwm10 0 5000000 0>;
+		brightness-levels = <0 2 4 6 8 12 16 24 32 48 64 96 128 192 255>;
+		default-brightness-level = <6>;
+
+		power-supply = <&vmmc>;
+		enable-gpios = <&gpio1 25 GPIO_ACTIVE_HIGH>;
+	};
+
+	aliases {
+		display0 = &lcd0;
+		display1 = &hdmi0;
+	};
+
+	tpd12s015: encoder {
+		compatible = "ti,tpd12s015";
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&tpd12s015_pins>;
+
+		gpios = <&gpio2 28 GPIO_ACTIVE_HIGH>,	/* 60, CT CP HPD */
+			<&gpio2 9 GPIO_ACTIVE_HIGH>,	/* 41, LS OE */
+			<&gpio2 31 GPIO_ACTIVE_HIGH>;	/* 63, HPD */
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+
+				tpd12s015_in: endpoint {
+					remote-endpoint = <&hdmi_out>;
+				};
+			};
+
+			port@1 {
+				reg = <1>;
+
+				tpd12s015_out: endpoint {
+					remote-endpoint = <&hdmi_connector_in>;
+				};
+			};
+		};
+	};
+
+	hdmi0: connector {
+		compatible = "hdmi-connector";
+		label = "hdmi";
+
+		type = "d";
+
+		port {
+			hdmi_connector_in: endpoint {
+				remote-endpoint = <&tpd12s015_out>;
+			};
+		};
+	};
+};
+
+&omap4_pmx_wkup {
+	pinctrl-names = "default";
+	pinctrl-0 = <
+			&twl6030_wkup_pins
+	>;
+
+	twl6030_wkup_pins: pinmux_twl6030_wkup_pins {
+		pinctrl-single,pins = <
+			0x14 (PIN_OUTPUT | MUX_MODE2)		/* fref_clk0_out.sys_drm_msecure */
+		>;
+	};
+};
+
+&omap4_pmx_core {
+	pinctrl-names = "default";
+	pinctrl-0 = <
+			&twl6030_pins
+			&mcpdm_pins
+			&dmic_pins
+			/* &mcbsp1_pins */
+			/* &mcbsp2_pins */
+			/* &dss_hdmi_pins */
+			/* &tpd12s015_pins */
+			/* &gpio_keys_pins */
+			&backlight_pins
+			&nt71391_pins
+			&bt_pins
+			/* &smb347_pins */
+	>;
+
+	gpio_keys_pins: pinmux_gpio_keys_pins {
+		pinctrl-single,pins = <
+			0x00 (PIN_INPUT_PULLUP | MUX_MODE3)	/* gpmc_wk1.gpio_wk1 */
+			0x34 (PIN_INPUT_PULLUP | MUX_MODE3)	/* gpmc_ncs0.gpio_50 */
+		>;
+	};
+
+	backlight_pins: pinmux_backlight_pins {
+		pinctrl-single,pins = <
+			0x190 (PIN_OUTPUT | MUX_MODE1)	/* dpm_emu18.dmtimer10_pwm_evt */
+			/*0x190 (PIN_OUTPUT | MUX_MODE3)*/
+			0x18a (PIN_OUTPUT | MUX_MODE3)	/* dpm_emu14.gpio_25 */
+		>;
+	};
+
+	nt71391_pins: pinmux_nt71391_pins {
+		pinctrl-single,pins = <
+			0x14 (PIN_OUTPUT | MUX_MODE3)	/* gpmc_ad11.gpio_35 */
+			0x1a (PIN_OUTPUT | MUX_MODE3)	/* gpmc_ad13.gpio_37 */
+		>;
+	};
+
+	smb347_pins: pinmux_smb347_pins {
+		pinctrl-single,pins = <
+			0x150 (PIN_INPUT | MUX_MODE3)	/* kpd_row1.gpio_2 */
+		>;
+	};
+
+	uart2_pins: pinmux_uart2_pins {
+		pinctrl-single,pins = <
+			0xd8 (PIN_INPUT_PULLUP | MUX_MODE0)	/* uart2_cts.uart2_cts */
+			0xda (PIN_OUTPUT | MUX_MODE0)		/* uart2_rts.uart2_rts */
+			0xdc (PIN_INPUT_PULLUP | MUX_MODE0)	/* uart2_rx.uart2_rx */
+			0xde (PIN_OUTPUT | MUX_MODE0)		/* uart2_tx.uart2_tx */
+		>;
+	};
+
+	uart3_pins: pinmux_uart3_pins {
+		pinctrl-single,pins = <
+			0x100 (PIN_INPUT_PULLUP | MUX_MODE0)	/* uart3_cts_rctx.uart3_cts_rctx */
+			0x102 (PIN_OUTPUT | MUX_MODE0)		/* uart3_rts_sd.uart3_rts_sd */
+			0x104 (PIN_INPUT | MUX_MODE0)		/* uart3_rx_irrx.uart3_rx_irrx */
+			0x106 (PIN_OUTPUT | MUX_MODE0)		/* uart3_tx_irtx.uart3_tx_irtx */
+		>;
+	};
+
+	uart4_pins: pinmux_uart4_pins {
+		pinctrl-single,pins = <
+			0x11c (PIN_INPUT | MUX_MODE0)		/* uart4_rx.uart4_rx */
+			0x11e (PIN_OUTPUT | MUX_MODE0)		/* uart4_tx.uart4_tx */
+		>;
+	};
+
+	twl6030_pins: pinmux_twl6030_pins {
+		pinctrl-single,pins = <
+			0x15e (WAKEUP_EN | PIN_INPUT_PULLUP | MUX_MODE0)	/* sys_nirq1.sys_nirq1 */
+		>;
+	};
+
+	mcpdm_pins: pinmux_mcpdm_pins {
+		pinctrl-single,pins = <
+			0xc6 (PIN_INPUT_PULLDOWN | MUX_MODE0)	/* abe_pdm_ul_data.abe_pdm_ul_data */
+			0xc8 (PIN_INPUT_PULLDOWN | MUX_MODE0)	/* abe_pdm_dl_data.abe_pdm_dl_data */
+			0xca (PIN_INPUT_PULLUP | MUX_MODE0)	/* abe_pdm_frame.abe_pdm_frame */
+			0xcc (PIN_INPUT_PULLDOWN | MUX_MODE0)	/* abe_pdm_lb_clk.abe_pdm_lb_clk */
+			0xce (PIN_INPUT_PULLDOWN | MUX_MODE0)	/* abe_clks.abe_clks */
+		>;
+	};
+
+	dmic_pins: pinmux_dmic_pins {
+		pinctrl-single,pins = <
+			0xd0 (PIN_OUTPUT | MUX_MODE0)		/* abe_dmic_clk1.abe_dmic_clk1 */
+			0xd2 (PIN_INPUT | MUX_MODE0)		/* abe_dmic_din1.abe_dmic_din1 */
+			0xd4 (PIN_INPUT | MUX_MODE0)		/* abe_dmic_din2.abe_dmic_din2 */
+			0xd6 (PIN_INPUT | MUX_MODE0)		/* abe_dmic_din3.abe_dmic_din3 */
+		>;
+	};
+
+	mcbsp1_pins: pinmux_mcbsp1_pins {
+		pinctrl-single,pins = <
+			0xbe (PIN_INPUT | MUX_MODE0)		/* abe_mcbsp1_clkx.abe_mcbsp1_clkx */
+			0xc0 (PIN_INPUT_PULLDOWN | MUX_MODE0)	/* abe_mcbsp1_dr.abe_mcbsp1_dr */
+			0xc2 (PIN_OUTPUT_PULLDOWN | MUX_MODE0)	/* abe_mcbsp1_dx.abe_mcbsp1_dx */
+			0xc4 (PIN_INPUT | MUX_MODE0)		/* abe_mcbsp1_fsx.abe_mcbsp1_fsx */
+		>;
+	};
+
+	mcbsp2_pins: pinmux_mcbsp2_pins {
+		pinctrl-single,pins = <
+			0xb6 (PIN_INPUT | MUX_MODE0)		/* abe_mcbsp2_clkx.abe_mcbsp2_clkx */
+			0xb8 (PIN_INPUT_PULLDOWN | MUX_MODE0)	/* abe_mcbsp2_dr.abe_mcbsp2_dr */
+			0xba (PIN_OUTPUT_PULLDOWN | MUX_MODE0)	/* abe_mcbsp2_dx.abe_mcbsp2_dx */
+			0xbc (PIN_INPUT | MUX_MODE0)		/* abe_mcbsp2_fsx.abe_mcbsp2_fsx */
+		>;
+	};
+
+	mcspi1_pins: pinmux_mcspi1_pins {
+		pinctrl-single,pins = <
+			0xf2 (PIN_INPUT | MUX_MODE0)		/*  mcspi1_clk.mcspi1_clk */
+			0xf4 (PIN_INPUT | MUX_MODE0)		/*  mcspi1_somi.mcspi1_somi */
+			0xf6 (PIN_INPUT | MUX_MODE0)		/*  mcspi1_simo.mcspi1_simo */
+			0xf8 (PIN_INPUT | MUX_MODE0)		/*  mcspi1_cs0.mcspi1_cs0 */
+			0xfa (PIN_INPUT | MUX_MODE0)		/*  mcspi1_cs1.mcspi1_cs1 */
+		>;
+	};
+
+	dss_hdmi_pins: pinmux_dss_hdmi_pins {
+		pinctrl-single,pins = <
+			0x5a (PIN_INPUT_PULLUP | MUX_MODE0)	/* hdmi_cec.hdmi_cec */
+			0x5c (PIN_INPUT_PULLUP | MUX_MODE0)	/* hdmi_scl.hdmi_scl */
+			0x5e (PIN_INPUT_PULLUP | MUX_MODE0)	/* hdmi_sda.hdmi_sda */
+		>;
+	};
+
+	tpd12s015_pins: pinmux_tpd12s015_pins {
+		pinctrl-single,pins = <
+			0x22 (PIN_OUTPUT | MUX_MODE3)		/* gpmc_a17.gpio_41 */	//???
+			0x48 (PIN_OUTPUT | MUX_MODE3)		/* gpmc_nbe1.gpio_60 */ //???
+			0x58 (PIN_INPUT_PULLDOWN | MUX_MODE3)	/* hdmi_hpd.gpio_63 */
+		>;
+	};
+
+	i2c1_pins: pinmux_i2c1_pins {
+		pinctrl-single,pins = <
+			0xe2 (PIN_INPUT_PULLUP | MUX_MODE0)	/* i2c1_scl */
+			0xe4 (PIN_INPUT_PULLUP | MUX_MODE0)	/* i2c1_sda */
+		>;
+	};
+
+	i2c2_pins: pinmux_i2c2_pins {
+		pinctrl-single,pins = <
+			0xe6 (PIN_INPUT_PULLUP | MUX_MODE0)	/* i2c2_scl */
+			0xe8 (PIN_INPUT_PULLUP | MUX_MODE0)	/* i2c2_sda */
+		>;
+	};
+
+	i2c3_pins: pinmux_i2c3_pins {
+		pinctrl-single,pins = <
+			0xea (PIN_INPUT_PULLUP | MUX_MODE0)	/* i2c3_scl */
+			0xec (PIN_INPUT_PULLUP | MUX_MODE0)	/* i2c3_sda */
+		>;
+	};
+
+	i2c4_pins: pinmux_i2c4_pins {
+		pinctrl-single,pins = <
+			0xee (PIN_INPUT_PULLUP | MUX_MODE0)	/* i2c4_scl */
+			0xf0 (PIN_INPUT_PULLUP | MUX_MODE0)	/* i2c4_sda */
+		>;
+	};
+
+	bt_pins: pinmux_bt_pins {
+		/* RST_N, EN(REG), WAKE, HOST_WAKE */
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x07a, PIN_OUTPUT_PULLDOWN | MUX_MODE3)		/* gpmc_ncs3.gpio_53 */
+			OMAP4_IOPAD(0x06c, PIN_OUTPUT_PULLDOWN | MUX_MODE3)		/* gpmc_a22.gpio_46 */
+			OMAP4_IOPAD(0x072, PIN_OUTPUT_PULLDOWN | MUX_MODE3)		/* gpmc_a25.gpio_49 */
+			OMAP4_IOPAD(0x0be, PIN_INPUT | MUX_MODE3)		/* cam_strobe.gpio_82 */
+		>;
+	};
+
+	/* GPIO output for WLAN_EN */
+	brcmfmac_vmmc_pins: pinmux_brcmfmac_vmmc_pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x066, PIN_OUTPUT_PULLUP | MUX_MODE3)		/* gpmc_a19.gpio_43 */
+		>;
+	};
+
+	/* brcm GPIO inputs and SDIO pins */
+	brcmfmac_pins: pinmux_brcmfmac_pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x068, PIN_INPUT | MUX_MODE3)		/* gpmc_a20.gpio_44 */
+			OMAP4_IOPAD(0x148, PIN_INPUT_PULLUP | MUX_MODE0)	/* sdmmc5_clk.sdmmc5_clk */
+			OMAP4_IOPAD(0x14a, PIN_INPUT_PULLUP | MUX_MODE0)	/* sdmmc5_cmd.sdmmc5_cmd */
+			OMAP4_IOPAD(0x14c, PIN_INPUT_PULLUP | MUX_MODE0)	/* sdmmc5_dat0.sdmmc5_dat0 */
+			OMAP4_IOPAD(0x14e, PIN_INPUT_PULLUP | MUX_MODE0)	/* sdmmc5_dat1.sdmmc5_dat1 */
+			OMAP4_IOPAD(0x150, PIN_INPUT_PULLUP | MUX_MODE0)	/* sdmmc5_dat2.sdmmc5_dat2 */
+			OMAP4_IOPAD(0x152, PIN_INPUT_PULLUP | MUX_MODE0)	/* sdmmc5_dat3.sdmmc5_dat3 */
+		>;
+	};
+
+	usb_otg_hs_pins: pinmux_usb_otg_hs_pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x194, PIN_OUTPUT_PULLDOWN | MUX_MODE0)	/* usba0_otg_ce */
+			OMAP4_IOPAD(0x196, PIN_INPUT | MUX_MODE0)		/* usba0_otg_dp */
+			OMAP4_IOPAD(0x198, PIN_INPUT | MUX_MODE0)		/* usba0_otg_dm */
+		>;
+	};
+
+	wm8962_pins: pinmux_wm8962_pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x1cc, PIN_INPUT_PULLDOWN | MUX_MODE3)		/* dpm_emu15.gpio_26 */
+		>;
+	};
+};
+
+&i2c1 {
+	/* Hack as this pinmuxing should already be set by bootloader */
+	/* pinctrl-names = "default";
+	pinctrl-0 = <&i2c1_pins>; */
+
+	clock-frequency = <400000>;
+
+	twl: twl@48 {
+		reg = <0x48>;
+		/* SPI = 0, IRQ# = 7, 4 = active high level-sensitive */
+		interrupts = <GIC_SPI 7 IRQ_TYPE_LEVEL_HIGH>; /* IRQ_SYS_1N cascaded to gic */
+		interrupt-parent = <&gic>;
+	};
+};
+
+#include "twl6030.dtsi"
+/* #include "twl6030_omap4.dtsi" */
+
+&twl {
+	compatible = "ti,twl6032";
+
+	vaux1: regulator-vaux1 {
+		compatible = "ti,twl6032-ldo2";
+		regulator-min-microvolt = <1000000>;
+		regulator-max-microvolt = <3000000>;
+		regulator-always-on;
+	};
+
+	ldo6: regulator-ldo6 {
+		compatible = "ti,twl6032-ldo6";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+	};
+
+	vmmc: regulator-vmmc {
+		compatible = "ti,twl6032-ldo5";
+		regulator-min-microvolt = <1200000>;
+		regulator-max-microvolt = <3000000>;
+	};
+
+	vusb: regulator-vusb {
+		compatible = "ti,twl6032-ldousb";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+	};
+
+	vaux2: regulator-vaux2 {
+		compatible = "ti,twl6032-ldo4";
+		regulator-min-microvolt = <1200000>;
+		regulator-max-microvolt = <2800000>;
+		regulator-always-on;
+	};
+};
+
+/* &twl {
+	compatible = "ti,twl6032";
+	interrupt-controller;
+	#interrupt-cells = <1>;
+
+	rtc {
+		compatible = "ti,twl4030-rtc";
+		interrupts = <11>;
+	};
+
+	vaux1: regulator-vaux1 {
+		compatible = "ti,twl6032-ldo2";
+		regulator-min-microvolt = <1000000>;
+		regulator-max-microvolt = <3000000>;
+		regulator-always-on;
+	};
+
+	vaux2: regulator-vaux2 {
+		compatible = "ti,twl6032-ldo4";
+		regulator-min-microvolt = <1200000>;
+		regulator-max-microvolt = <2800000>;
+	};
+
+	vaux3: regulator-vaux3 {
+		compatible = "ti,twl6032-ldo3";
+		regulator-min-microvolt = <1000000>;
+		regulator-max-microvolt = <3000000>;
+	};
+
+	vmmc: regulator-vmmc {
+		compatible = "ti,twl6032-ldo5";
+		regulator-min-microvolt = <1200000>;
+		regulator-max-microvolt = <3000000>;
+	};
+
+	vpp: regulator-vpp {
+		compatible = "ti,twl6032-ldo1";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <2500000>;
+	};
+
+	vusim: regulator-vusim {
+		compatible = "ti,twl6032-ldo7";
+		regulator-min-microvolt = <1200000>;
+		regulator-max-microvolt = <2900000>;
+	};
+
+	vdd_mpu: regulator-vdd1 {
+		compatible = "ti,twl6030-vdd1";
+		regulator-min-microvolt = <500000>;
+		regulator-max-microvolt = <1500000>;
+	};
+
+	vdd_iva: regulator-vdd2 {
+		compatible = "ti,twl6030-vdd2";
+		regulator-min-microvolt = <500000>;
+		regulator-max-microvolt = <1500000>;
+	};
+
+	vdd_core: regulator-vdd3 {
+		compatible = "ti,twl6030-vdd3";
+		regulator-min-microvolt = <500000>;
+		regulator-max-microvolt = <1500000>;
+	};
+
+	vdac: regulator-vdac {
+		compatible = "ti,twl6032-vdoln";
+	};
+
+	vana: regulator-vana {
+		compatible = "ti,twl6030-vana";
+	};
+
+	ldo6: regulator-ldo6 {
+		compatible = "ti,twl6032-ldo6";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+	};
+
+	vusb: regulator-vusb {
+		compatible = "ti,twl6032-ldousb";
+	};
+
+	v1v8: regulator-v1v8 {
+		compatible = "ti,twl6030-v1v8";
+		regulator-always-on;
+	};
+
+	v2v1: regulator-v2v1 {
+		compatible = "ti,twl6030-v2v1";
+		regulator-always-on;
+	};
+
+	twl_usb_comparator: usb-comparator {
+		compatible = "ti,twl6030-usb";
+		interrupts = <4>, <10>;
+	};
+
+	gpadc {
+		compatible = "ti,twl6030-gpadc";
+		interrupts = <3>;
+		#io-channel-cells = <1>;
+	};
+}; */
+
+&i2c2 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c2_pins>;
+	clock-frequency = <400000>;
+};
+
+&i2c3 {
+	/* Same here - muxed by bootloader */
+	/* pinctrl-names = "default";
+	pinctrl-0 = <&i2c3_pins>; */
+	clock-frequency = <400000>;
+
+	bq27541@55 {
+		compatible = "ti,bq27541";
+		reg = <0x55>;
+	};
+
+	/*
+	 * Temperature Sensor
+	 */
+	tmp103@70 {
+		compatible = "ti,tmp103";
+		reg = <0x70>;
+	};
+
+	smb347@5f {
+		compatible = "summit,smb347";
+		reg = <0x5f>;
+		status = "okay";
+
+		pinctrl-names = "default";
+		// pinctrl-0 = <&smb347_pins>;
+
+		interrupts = <2 1>;	/* gpio_2 trigger_rising */
+		interrupt-parent = <&gpio1>;
+
+		max-chg-curr = <1800000>;
+		pre-chg-curr = <250000>;
+		term-curr = <250000>;
+		mains-curr-limit = <2000000>;
+		usb-curr-limit = <450000>;
+		chip-temp-thershold = <100>;
+
+		enable-usb-charging;
+		enable-otg-charging = <4>; /* CONTROL_SW_PIN */
+		enable-chg-ctrl = <0>;
+	};
+
+	codec: wm8962@1a {
+		compatible = "wlf,wm8962";
+		reg = <0x1a>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&wm8962_pins>;
+
+//		interrupts = <26 IRQ_TYPE_LEVEL_HIGH>;	/* gpio_26 */
+//		interrupt-parent = <&gpio1>;
+
+		clocks = <&auxclk0_ck>;
+
+		gpio-cfg = <
+			0x0000 /* 0:Default */
+			0x0003 /* 1:FN_IRQ */
+			0x0000 /* 2:Default */
+			0x0000 /* 3:Default */
+			0x8014 /* 4:FN_DMICCDAT */
+			0x0013 /* 5:FN_DMICCLK */
+		>;
+	};
+};
+
+&i2c4 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c4_pins>;
+	clock-frequency = <400000>;
+	/*
+	 * IMU
+	 */
+	mpu6050@68 {
+		compatible = "mpu6050";
+		reg = <0x68>;
+	};
+};
+
+&mcspi1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&mcspi1_pins>;
+};
+
+&mmc1 {
+	status = "disabled";
+};
+
+&mmc2 {
+	vmmc-supply = <&vmmc>;
+	bus-width = <8>;
+	non-removable;
+	disable-wp;
+	ti,non-removable;
+};
+
+&mmc3 {
+	status = "disabled";
+};
+
+&mmc4 {
+	status = "disabled";
+};
+
+&mmc5 {
+	pinctrl-names = "default";
+	pinctrl-0 = <
+		&brcmfmac_pins
+		&brcmfmac_vmmc_pins
+	>;
+	/*vmmc-supply = <&brcmfmac_vmmc>;*/
+	vmmc-supply = <&vaux1>;
+
+	bus-width = <4>;
+	non-removable;
+	ti,non-removable;
+	/*cap-power-off-card;*/
+	/*max-frequency = <50000000>;*/
+
+	#address-cells = <1>;
+	#size-cells = <0>;
+	brcmf: bcrmf@1 {
+		reg = <1>;
+		compatible = "brcm,bcm4329-fmac";
+		interrupt-parent = <&gpio2>;
+		interrupts = <12 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-names = "host-wake";
+		brcm,drive-strength = <6>;
+	};
+};
+
+&emif1 {
+	cs1-used;
+	device-handle = <&elpida_ECB240ABACN>;
+};
+
+&emif2 {
+	cs1-used;
+	device-handle = <&elpida_ECB240ABACN>;
+};
+
+&uart2 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart2_pins>;
+	interrupts-extended = <&wakeupgen GIC_SPI 73 IRQ_TYPE_LEVEL_HIGH
+			       &omap4_pmx_core OMAP4_UART2_RX>;
+};
+
+&uart3 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart3_pins>;
+	interrupts-extended = <&wakeupgen GIC_SPI 74 IRQ_TYPE_LEVEL_HIGH
+			       &omap4_pmx_core OMAP4_UART3_RX>;
+};
+
+&uart4 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart4_pins>;
+	interrupts-extended = <&wakeupgen GIC_SPI 70 IRQ_TYPE_LEVEL_HIGH
+			       &omap4_pmx_core OMAP4_UART4_RX>;
+};
+
+&mcbsp1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&mcbsp1_pins>;
+	status = "disabled";
+};
+
+&mcbsp2 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&mcbsp2_pins>;
+	status = "okay";
+};
+
+&mcbsp3 {
+	status = "disabled";
+};
+
+&dmic {
+	pinctrl-names = "default";
+	pinctrl-0 = <&dmic_pins>;
+	status = "okay";
+};
+
+&twl_usb_comparator {
+	/*usb-supply = <&ldousb>;*/
+	usb-supply = <&vusb>;
+};
+
+&usb_otg_hs {
+/*	pinctrl-names = "default";
+	pinctrl-0 = <&usb_otg_hs_pins>;*/
+
+	interface-type = <1>;
+	mode = <3>;
+	power = <50>;
+};
+
+&dss {
+	status = "ok";
+};
+
+&dsi1 {
+	status = "ok";
+	vdd-supply = <&ldo6>;
+
+	port {
+		dsi1_out_ep: endpoint {
+			remote-endpoint = <&lcd0_in>;
+			lanes = <
+				4 5
+				0 1
+				2 3
+				6 7
+				8 9
+			>;
+		};
+	};
+
+	lcd0: display {
+		compatible = "hydis,nt71391";
+		label = "lcd0";
+
+		enable-gpios = <&gpio2 3 GPIO_ACTIVE_HIGH>;
+		cabc-gpios = <&gpio2 5 GPIO_ACTIVE_HIGH>;
+
+		backlight = <&lcd0_bl>;
+
+		port {
+			lcd0_in: endpoint {
+				remote-endpoint = <&dsi1_out_ep>;
+			};
+		};
+	};
+};
+
+&hdmi {
+	status = "ok";
+	vdda-supply = <&vdac>;
+
+	pinctrl-names = "dafault";
+	pinctrl-0 = <&dss_hdmi_pins>;
+
+	port {
+		hdmi_out: endpoint {
+			remote-endpoint = <&tpd12s015_in>;
+		};
+	};
+};
+
+&bb2d {
+	status = "okay";
+};
+
+&dsp {
+	status = "okay";
+	memory-region = <&dsp_cma_pool>;
+	timers = <&timer5>;
+	watchdog-timers = <&timer6>;
+};
+
+&ipu {
+	status = "okay";
+	memory-region = <&ipu_cma_pool>;
+	timers = <&timer3>;
+	watchdog-timers = <&timer9>, <&timer11>;
+};
