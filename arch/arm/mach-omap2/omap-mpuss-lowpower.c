@@ -466,7 +466,7 @@ void __init omap4_mpuss_early_init(void)
 
 	sar_base = omap4_get_sar_ram_base();
 
-	if (cpu_is_omap443x())
+	if (cpu_is_omap443x() || soc_is_omap447x())
 		startup_pa = virt_to_phys(omap4_secondary_startup);
 	else if (cpu_is_omap446x())
 		startup_pa = virt_to_phys(omap4460_secondary_startup);
