@@ -85,6 +85,22 @@ static int rfkill_gpio_acpi_probe(struct device *dev,
 					 acpi_rfkill_default_gpios);
 }
 
+static int rfkill_gpio_of_probe(struct device *dev,
+				struct rfkill_gpio_data *rfkill)
+{
+	const char *type_name;
+
+	device_property_read_string(dev, "rfkill-name", &rfkill->name);
+	device_property_read_string(dev, "rfkill-type", &type_name);
+
+	if (!rfkill->name)
+		rfkill->name = dev_name(dev);
+
+	rfkill->type = rfkill_find_type(type_name);
+
+	return 0;
+}
+
 static int rfkill_gpio_probe(struct platform_device *pdev)
 {
 	struct rfkill_gpio_data *rfkill;
@@ -106,6 +122,10 @@ static int rfkill_gpio_probe(struct platform_device *pdev)
 
 	if (ACPI_HANDLE(&pdev->dev)) {
 		ret = rfkill_gpio_acpi_probe(&pdev->dev, rfkill);
+		if (ret)
+			return ret;
+	} else if (&pdev->dev.of_node) {
+		ret = rfkill_gpio_of_probe(&pdev->dev, rfkill);
 		if (ret)
 			return ret;
 	}
@@ -168,12 +188,19 @@ static const struct acpi_device_id rfkill_acpi_match[] = {
 MODULE_DEVICE_TABLE(acpi, rfkill_acpi_match);
 #endif
 
+static const struct of_device_id rfkill_of_match[] = {
+	{ .compatible = "rfkill-gpio", },
+	{},
+};
+MODULE_DEVICE_TABLE(of, rfkill_of_match);
+
 static struct platform_driver rfkill_gpio_driver = {
 	.probe = rfkill_gpio_probe,
 	.remove = rfkill_gpio_remove,
 	.driver = {
 		.name = "rfkill_gpio",
 		.acpi_match_table = ACPI_PTR(rfkill_acpi_match),
+		.of_match_table = of_match_ptr(rfkill_of_match),
 	},
 };
 
