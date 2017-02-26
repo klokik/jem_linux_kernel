@@ -594,6 +594,7 @@ static const struct sdiod_drive_str sdiod_drvstr_tab2_3v3[] = {
 };
 
 BRCMF_FW_NVRAM_DEF(43143, "brcmfmac43143-sdio.bin", "brcmfmac43143-sdio.txt");
+BRCMF_FW_NVRAM_DEF(43239, "brcmfmac43239-sdio.bin", "brcmfmac43239-sdio.txt");
 BRCMF_FW_NVRAM_DEF(43241B0, "brcmfmac43241b0-sdio.bin",
 		   "brcmfmac43241b0-sdio.txt");
 BRCMF_FW_NVRAM_DEF(43241B4, "brcmfmac43241b4-sdio.bin",
@@ -614,6 +615,7 @@ BRCMF_FW_NVRAM_DEF(4356, "brcmfmac4356-sdio.bin", "brcmfmac4356-sdio.txt");
 
 static struct brcmf_firmware_mapping brcmf_sdio_fwnames[] = {
 	BRCMF_FW_NVRAM_ENTRY(BRCM_CC_43143_CHIP_ID, 0xFFFFFFFF, 43143),
+	BRCMF_FW_NVRAM_ENTRY(BRCM_CC_43239_CHIP_ID, 0xFFFFFFFF, 43239),
 	BRCMF_FW_NVRAM_ENTRY(BRCM_CC_43241_CHIP_ID, 0x0000001F, 43241B0),
 	BRCMF_FW_NVRAM_ENTRY(BRCM_CC_43241_CHIP_ID, 0x00000020, 43241B4),
 	BRCMF_FW_NVRAM_ENTRY(BRCM_CC_43241_CHIP_ID, 0xFFFFFFC0, 43241B5),
