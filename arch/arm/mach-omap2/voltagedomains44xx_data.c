@@ -108,7 +108,7 @@ void __init omap44xx_voltagedomains_init(void)
 		omap4_voltdm_mpu.volt_data = omap443x_vdd_mpu_volt_data;
 		omap4_voltdm_iva.volt_data = omap443x_vdd_iva_volt_data;
 		omap4_voltdm_core.volt_data = omap443x_vdd_core_volt_data;
-	} else if (cpu_is_omap446x()) {
+	} else if (cpu_is_omap446x() || soc_is_omap447x()) {
 		omap4_voltdm_mpu.volt_data = omap446x_vdd_mpu_volt_data;
 		omap4_voltdm_iva.volt_data = omap446x_vdd_iva_volt_data;
 		omap4_voltdm_core.volt_data = omap446x_vdd_core_volt_data;
