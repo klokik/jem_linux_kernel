@@ -217,6 +217,30 @@ static struct omap_hwmod omap44xx_mpu_private_hwmod = {
 };
 
 /*
+ * 'bb2d' class
+ *
+ */
+
+static struct omap_hwmod_class omap44xx_bb2d_hwmod_class = {
+	.name	= "bb2d",
+};
+
+/* bb2d */
+static struct omap_hwmod omap44xx_bb2d_hwmod = {
+	.name		= "bb2d",
+	.class		= &omap44xx_bb2d_hwmod_class,
+	.clkdm_name	= "l3_dss_clkdm",
+	.main_clk	= "dpll_per_m6x2_ck",
+	.prcm = {
+		.omap4 = {
+			.clkctrl_offs = OMAP4_CM_DSS_BB2D_CLKCTRL_OFFSET,
+			.context_offs = OMAP4_RM_DSS_BB2D_CONTEXT_OFFSET,
+			.modulemode   = MODULEMODE_SWCTRL,
+		},
+	},
+};
+
+/*
  * 'ocp_wp_noc' class
  * instance(s): ocp_wp_noc
  */
@@ -3232,6 +3256,14 @@ static struct omap_hwmod_ocp_if omap44xx_fdif__l3_main_2 = {
 	.user		= OCP_USER_MPU | OCP_USER_SDMA,
 };
 
+/* bb2d -> l3_main_2 */
+static struct omap_hwmod_ocp_if omap44xx_bb2d__l3_main_2 = {
+	.master		= &omap44xx_bb2d_hwmod,
+	.slave		= &omap44xx_l3_main_2_hwmod,
+	.clk		= "l3_div_ck",
+	.user		= OCP_USER_MPU | OCP_USER_SDMA,
+};
+
 /* gpu -> l3_main_2 */
 static struct omap_hwmod_ocp_if omap44xx_gpu__l3_main_2 = {
 	.master		= &omap44xx_gpu_hwmod,
@@ -3966,6 +3998,24 @@ static struct omap_hwmod_ocp_if omap44xx_l3_main_2__gpmc = {
 	.user		= OCP_USER_MPU | OCP_USER_SDMA,
 };
 
+static struct omap_hwmod_addr_space omap44xx_bb2d_addrs[] = {
+	{
+		.pa_start	= 0x59000000,
+		.pa_end		= 0x590007ff,
+		.flags		= ADDR_TYPE_RT
+	},
+	{ }
+};
+
+/* l3_main_2 -> bb2d */
+static struct omap_hwmod_ocp_if omap44xx_l3_main_2__bb2d = {
+	.master		= &omap44xx_l3_main_2_hwmod,
+	.slave		= &omap44xx_bb2d_hwmod,
+	.clk		= "l3_div_ck",
+	.addr		= omap44xx_bb2d_addrs,
+	.user		= OCP_USER_MPU | OCP_USER_SDMA,
+};
+
 static struct omap_hwmod_addr_space omap44xx_gpu_addrs[] = {
 	{
 		.pa_start	= 0x56000000,
@@ -4666,6 +4716,7 @@ static struct omap_hwmod_ocp_if *omap44xx_hwmod_ocp_ifs[] __initdata = {
 	&omap44xx_debugss__l3_main_2,
 	&omap44xx_dma_system__l3_main_2,
 	&omap44xx_fdif__l3_main_2,
+	&omap44xx_bb2d__l3_main_2,
 	&omap44xx_gpu__l3_main_2,
 	&omap44xx_hsi__l3_main_2,
 	&omap44xx_ipu__l3_main_2,
@@ -4725,6 +4776,7 @@ static struct omap_hwmod_ocp_if *omap44xx_hwmod_ocp_ifs[] __initdata = {
 	&omap44xx_l4_per__gpio5,
 	&omap44xx_l4_per__gpio6,
 	&omap44xx_l3_main_2__gpmc,
+	&omap44xx_l3_main_2__bb2d,
 	&omap44xx_l3_main_2__gpu,
 	&omap44xx_l4_per__hdq1w,
 	&omap44xx_l4_cfg__hsi,
