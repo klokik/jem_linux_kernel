@@ -455,6 +455,12 @@
 		regulator-max-microvolt = <2800000>;
 		regulator-always-on;
 	};
+
+	vusim: regulator-vusim {
+		compatible = "ti,twl6032-ldo7";
+		regulator-min-microvolt = <1200000>;
+		regulator-max-microvolt = <2900000>;
+	};
 };
 
 /* &twl {
@@ -588,15 +594,17 @@
 	};
 
 	smb347@5f {
+		status = "okay";
 		compatible = "summit,smb347";
 		reg = <0x5f>;
-		status = "okay";
 
 		pinctrl-names = "default";
-		// pinctrl-0 = <&smb347_pins>;
+		pinctrl-0 = <&smb347_pins>;
 
-		interrupts = <2 1>;	/* gpio_2 trigger_rising */
+		interrupts = <2 IRQ_TYPE_EDGE_FALLING>;	/* gpio_2 trigger_rising */
 		interrupt-parent = <&gpio1>;
+
+		power-supply = <&vusim>;
 
 		max-chg-curr = <1800000>;
 		pre-chg-curr = <250000>;
