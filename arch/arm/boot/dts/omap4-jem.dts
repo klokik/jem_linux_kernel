@@ -793,7 +793,7 @@
 		enable-gpios = <&gpio2 3 GPIO_ACTIVE_HIGH>;
 		cabc-gpios = <&gpio2 5 GPIO_ACTIVE_HIGH>;
 
-		//backlight = <&lcd0_bl>;
+		backlight = <&lcd0_bl>;
 
 		port {
 			lcd0_in: endpoint {
