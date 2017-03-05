@@ -11,12 +11,6 @@
  * published by the Free Software Foundation.
  */
 
-#define GPIO_SMB347_IRQ		2
-#define SMB347_NAME		"smb347"
-
-/*struct smb347_platform_data {
-	const char *regulator_name;
-};*/
 
 #define SUMMIT_SMB347_ID			0xE
 

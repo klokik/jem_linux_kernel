@@ -73,13 +73,17 @@ struct smb347_priv {
 	atomic_t ac_online;
 	struct otg_transceiver *otg_xceiv;
 	struct mutex lock;
-	struct notifier_block usb_notifier;
+	//struct notifier_block usb_notifier;
+	struct work_struct usb_vbus_on_work;
+	struct work_struct usb_vbus_off_work;
+	struct work_struct usb_vbus_detect_work;
 	struct regulator *regulator;
 	//struct thermal_dev *tdev;
 	int max_thermal_charge_current;
 	int bad_battery;
 	int charge_current;
 	int thermal_affect;
+	int supply_type;
 	atomic_t charger_on;
 	/* Many of the registers cannot change without IRQ or register write.
 	 * So cache their contents to save some I2C transactions. Note that
@@ -903,12 +907,13 @@ static irqreturn_t summit_smb347_irq(int irq, void *data)
 //				dev_info(priv->dev, "Wake locked.\n");
 //			}
 			atomic_set(&priv->charger_on, 1);
-			//twl6030_usb_event(TWL6030_USB_EVENT_VBUS_ON);
+			schedule_work(&priv->usb_vbus_on_work);
 		} else {
 //			if (wake_lock_active(&priv->smb_wl)) {
 //				wake_unlock(&priv->smb_wl);
 //				dev_info(priv->dev, "Wake unlocked.\n");
 //			}
+			schedule_work(&priv->usb_vbus_off_work);
 			atomic_set(&priv->charger_on, 0);
 		}
 		smb347_pr_creg(priv, SMB347_ENABLE_CONTROL);
@@ -942,8 +947,9 @@ static irqreturn_t summit_smb347_irq(int irq, void *data)
 	/* Check for APSD Complete */
 	if (RISE_IRQ(SMB347_INTSTD, APSD_COMPLETE) &&
 		smb347_status_apsd_completed(priv) &&
-		atomic_read(&priv->charger_on))
-		//twl6030_usb_event(TWL6030_USB_EVENT_VBUS_DETECT);
+		atomic_read(&priv->charger_on))	{
+		schedule_work(&priv->usb_vbus_detect_work);
+	}
 
 	/* Check for AICL Complete */
 	if (RISE_IRQ(SMB347_INTSTD, AICL_COMPLETE) &&
@@ -1097,54 +1103,57 @@ static int smb347_get_ac_property(struct power_supply *ps,
 	return 0;
 }
 
-/*static int smb347_usb_notifier_cb(struct notifier_block *nb,
-			unsigned long val, void *data)
+static void smb347_usb_vbus_on_work(struct work_struct *data)
 {
 	struct smb347_priv *priv;
-	enum power_supply_type *supply = data;
 
-	priv = container_of(nb, struct smb347_priv, usb_notifier);
+	priv = container_of(data, struct smb347_priv, usb_vbus_on_work);
 
-	switch (val) {
-	case TWL6030_USB_EVENT_VBUS_ON:
-		dev_info(priv->dev, "in %s, VBUS ON.\n",
-			__func__);
-		mutex_lock(&priv->lock);
-		if (atomic_read(&priv->charger_on))
-			dev_info(priv->dev, "Restarting VBUS detection.\n");
-		else {
-			dev_info(priv->dev, "Starting VBUS detection.\n");
-			atomic_set(&priv->charger_on, 1);
-		}
-		smb347_redo_apsd(priv);
-		mutex_unlock(&priv->lock);
-		break;
-
-	case TWL6030_USB_EVENT_VBUS_OFF:
-		dev_info(priv->dev, "in %s, VBUS OFF\n", __func__);
-		// USB disconnected
-		atomic_set(&priv->ac_online, 0);
-		atomic_set(&priv->usb_online, 0);
-
-		power_supply_changed(priv->ac);
-		power_supply_changed(priv->usb);
-
-		dev_info(priv->dev, "USB disconnected\n");
-#ifdef CONFIG_AMAZON_METRICS_LOG
-		usb_log_metrics("usb_disconnected");
-#endif
-		break;
-
-	case TWL6030_USB_EVENT_VBUS_DETECT:
-		dev_info(priv->dev, "%s-EVENT_VBUS DETECT | charger_on = %d\n",
-				__func__, atomic_read(&priv->charger_on));
-		mutex_lock(&priv->lock);
-		*supply = smb347_handle_apsd_complete(priv);
-		mutex_unlock(&priv->lock);
-		break;
+	dev_info(priv->dev, "in %s, VBUS ON.\n",
+		__func__);
+	mutex_lock(&priv->lock);
+	if (atomic_read(&priv->charger_on))
+		dev_info(priv->dev, "Restarting VBUS detection.\n");
+	else {
+		dev_info(priv->dev, "Starting VBUS detection.\n");
+		atomic_set(&priv->charger_on, 1);
 	}
-	return 0;
-}*/
+	smb347_redo_apsd(priv);
+	mutex_unlock(&priv->lock);
+}
+
+static void smb347_usb_vbus_off_work(struct work_struct *data)
+{
+	struct smb347_priv *priv;
+
+	priv = container_of(data, struct smb347_priv, usb_vbus_off_work);
+
+	dev_info(priv->dev, "in %s, VBUS OFF\n", __func__);
+	// USB disconnected
+	atomic_set(&priv->ac_online, 0);
+	atomic_set(&priv->usb_online, 0);
+
+	power_supply_changed(priv->ac);
+	power_supply_changed(priv->usb);
+
+	dev_info(priv->dev, "USB disconnected\n");
+#ifdef CONFIG_AMAZON_METRICS_LOG
+	usb_log_metrics("usb_disconnected");
+#endif
+}
+
+static void smb347_usb_vbus_detect_work(struct work_struct *data)
+{
+	struct smb347_priv *priv;
+
+	priv = container_of(data, struct smb347_priv, usb_vbus_detect_work);
+
+	dev_info(priv->dev, "%s-EVENT_VBUS DETECT | charger_on = %d\n",
+			__func__, atomic_read(&priv->charger_on));
+	mutex_lock(&priv->lock);
+	priv->supply_type = smb347_handle_apsd_complete(priv);
+	mutex_unlock(&priv->lock);
+}
 
 static ssize_t smb347_status_a_show(struct device *dev,
 			struct device_attribute *attr, char *buf)
@@ -2469,7 +2478,6 @@ static int summit_smb347_probe(struct i2c_client *client,
 {
 	static char *battery[] = { "smb347-battery" };
 	struct smb347_priv *priv = NULL;
-	//struct smb347_platform_data *pdata = NULL;
 	struct regulator *regulator = NULL;
 	struct power_supply_config ac_usb_cfg = {};
 	int ret = 0, chip_id = 0;
@@ -2542,19 +2550,12 @@ static int summit_smb347_probe(struct i2c_client *client,
 	dev_info(priv->dev, "SMB347 detected, addr=0x%02x chip_id=0x%0x\n",
 		 client->addr, chip_id);
 
-	//priv->usb_notifier.notifier_call = smb347_usb_notifier_cb;
-
-	/*ret = twl6030_usb_register_notifier(&priv->usb_notifier);
-	if (ret) {
-		dev_err(priv->dev, "otg_register_notifier failed: %d\n", ret);
-		goto err4;
-	}*/
-
 	/* Set up and register the power_supply structs */
 	ac_usb_cfg.supplied_to = battery;
 	ac_usb_cfg.num_supplicants = ARRAY_SIZE(battery);
 	ac_usb_cfg.drv_data = priv;
 
+	priv->supply_type = smb347_usb_desc.type;
 	priv->charge_current = 0;
 	priv->thermal_affect = 0;
 
@@ -2575,6 +2576,11 @@ static int summit_smb347_probe(struct i2c_client *client,
 			"failed to register usb power supply: %d\n", ret);
 		goto err2;
 	}
+
+	/* Init work queues */
+	INIT_WORK(&priv->usb_vbus_on_work, smb347_usb_vbus_on_work);
+	INIT_WORK(&priv->usb_vbus_off_work, smb347_usb_vbus_off_work);
+	INIT_WORK(&priv->usb_vbus_detect_work, smb347_usb_vbus_detect_work);
 
 	/* Register the sysfs nodes */
 	ret = sysfs_create_group(&priv->dev->kobj, &smb347_attrs_group);
@@ -2706,8 +2712,6 @@ err2:
 	power_supply_unregister(priv->usb);
 err3:
 	power_supply_unregister(priv->ac);
-//err4:
-	//twl6030_usb_unregister_notifier(&priv->usb_notifier);
 err5:
 	i2c_set_clientdata(client, NULL);
 err6:
@@ -2723,12 +2727,14 @@ static int summit_smb347_remove(struct i2c_client *client)
 {
 	struct smb347_priv *priv = i2c_get_clientdata(client);
 
-	//twl6030_usb_unregister_notifier(&priv->usb_notifier);
-
 	/* Free IRQ */
 	free_irq(priv->i2c_client->irq, priv);
 
 	sysfs_remove_group(&priv->dev->kobj, &smb347_attrs_group);
+
+	cancel_work_sync(&priv->usb_vbus_on_work);
+	cancel_work_sync(&priv->usb_vbus_off_work);
+	cancel_work_sync(&priv->usb_vbus_detect_work);
 
 	power_supply_unregister(priv->usb);
 	power_supply_unregister(priv->ac);
@@ -2747,10 +2753,9 @@ static int summit_smb347_remove(struct i2c_client *client)
 }
 
 
-#ifdef CONFIG_PM
-static void summit_smb347_shutdown(struct device *dev)
+static void summit_smb347_shutdown(struct i2c_client *client)
 {
-	struct smb347_priv *priv = dev_get_drvdata(dev);
+	struct smb347_priv *priv = i2c_get_clientdata(client);
 	int ret = 0;
 
 	dev_info(priv->dev, "Shutting down\n");
@@ -2779,6 +2784,7 @@ err_out:
 
 }
 
+#ifdef CONFIG_PM
 static int summit_smb347_suspend(struct device *dev)
 {
 	struct smb347_priv *priv = dev_get_drvdata(dev);
@@ -2804,7 +2810,6 @@ static int summit_smb347_resume(struct device *dev)
 static const struct dev_pm_ops summit_smb347_pm = {
 	.suspend = summit_smb347_suspend,
 	.resume = summit_smb347_resume,
-//	.idle = summit_smb347_shutdown,
 };
 
 static const struct of_device_id summit_smb347_of_match[] = {
@@ -2819,8 +2824,6 @@ static const struct i2c_device_id summit_smb347_id[] =  {
 };
 MODULE_DEVICE_TABLE(i2c, summit_smb347_id);
 
-//static unsigned short normal_i2c[] = { SUMMIT_SMB347_I2C_ADDRESS, I2C_CLIENT_END };
-
 static struct i2c_driver summit_smb347_i2c_driver = {
 	.driver = {
 			.name = "smb347",
@@ -2830,38 +2833,11 @@ static struct i2c_driver summit_smb347_i2c_driver = {
 	.probe = summit_smb347_probe,
 	.remove = summit_smb347_remove,
 	.id_table = summit_smb347_id,
-	//.address_list = normal_i2c,
-	//.suspend = summit_smb347_suspend,
-	//.resume = summit_smb347_resume,
-	//.shutdown = summit_smb347_shutdown,
+	.shutdown = summit_smb347_shutdown,
 };
 
 module_i2c_driver(summit_smb347_i2c_driver);
 
-/*static int __init summit_smb347_init(void)
-{
-	int ret = 0;
-
-	printk(KERN_INFO "Summit SMB347 Driver\n");
-
-	ret = i2c_add_driver(&summit_smb347_i2c_driver);
-	if (ret) {
-		printk(KERN_ERR "summit_smb347: Could not add driver\n");
-		return ret;
-	}
-
-	printk(KERN_INFO "SMB347 Driver added\n");
-
-	return 0;
-}
-
-static void __exit summit_smb347_exit(void)
-{
-	i2c_del_driver(&summit_smb347_i2c_driver);
-}*/
-
-//module_init(summit_smb347_init);
-//module_exit(summit_smb347_exit);
 
 MODULE_DESCRIPTION("Summit SMB347 Driver");
 MODULE_AUTHOR(DRIVER_AUTHOR);
