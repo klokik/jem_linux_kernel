@@ -10,6 +10,7 @@
 #include <linux/of.h>
 #include <linux/of_gpio.h>
 #include <linux/backlight.h>
+#include <linux/workqueue.h>
 
 #include <video/omap-panel-data.h>
 #include <video/mipi_display.h>
@@ -35,7 +36,7 @@
 
 
 struct panel_drv_data {
-	struct omap_dss_device dssdev;	// Needed ???
+	struct omap_dss_device dssdev;
 	struct omap_dss_device *in;
 
 #ifdef USE_OMAP_TIMINGS
@@ -44,7 +45,9 @@ struct panel_drv_data {
 	struct videomode vm;
 #endif
 
+	struct device_node *backlight_node;
 	struct backlight_device *backlight;
+	struct delayed_work backlight_work;
 
 	struct platform_device *pdev;
 
@@ -60,7 +63,6 @@ struct panel_drv_data {
 
 	bool intro_printed;
 //	bool enabled;
-
 };
 
 #define NT71391_WIDTH		1920
@@ -280,6 +282,61 @@ static void pdsivm_disconnect(struct omap_dss_device *dssdev)
 	in->ops.dsi->disconnect(in, dssdev);
 }
 
+/* Backlight device might be initialized later then the panel
+ * 	but if we defer panel probe, omapdrm will never probe it again.
+ * 	Return: 1 on successful fetch, 0 otherwise
+ * 	device node is put as soon as backlight device is fetched
+ * 	*/
+static int fetch_backlight_device(struct panel_drv_data *ddata)
+{
+	if (ddata->backlight)
+		return 1;
+
+	if (!ddata->backlight_node) {
+		dev_err(&ddata->pdev->dev, "no backlight node");
+		return 0;
+	}
+
+	ddata->backlight = of_find_backlight_by_node(ddata->backlight_node);
+	if (ddata->backlight) {
+		dev_dbg(&ddata->pdev->dev, "got backlight device");
+		of_node_put(ddata->backlight_node);
+		return 1;
+	}
+
+	dev_warn(&ddata->pdev->dev, "still no backlight device");
+	return 0;
+}
+
+static void backlight_fetch_work(struct work_struct *data)
+{
+	struct panel_drv_data *ddata = container_of(data, struct panel_drv_data,
+								backlight_work.work);
+
+	mutex_lock(&ddata->lock);
+
+	if (!fetch_backlight_device(ddata)) {
+		schedule_delayed_work(&ddata->backlight_work, HZ/2);
+		goto out;
+	}
+
+	// update backlight status
+	switch (ddata->dssdev.state) {
+	case OMAP_DSS_DISPLAY_ACTIVE:
+		ddata->backlight->props.power = FB_BLANK_UNBLANK;
+		break;
+
+	case OMAP_DSS_DISPLAY_DISABLED:
+		ddata->backlight->props.power = FB_BLANK_POWERDOWN;
+		break;
+	}
+
+	backlight_update_status(ddata->backlight);
+
+out:
+	mutex_unlock(&ddata->lock);
+}
+
 static int pdsivm_enable(struct omap_dss_device *dssdev)
 {
 	struct panel_drv_data *ddata = to_panel_data(dssdev);
@@ -339,14 +396,14 @@ static void pdsivm_disable(struct omap_dss_device *dssdev)
 
 	in->ops.dsi->bus_unlock(in);
 
-	mutex_unlock(&ddata->lock);
-
 	dssdev->state = OMAP_DSS_DISPLAY_DISABLED;
 
 	if (ddata->backlight) {
 		ddata->backlight->props.power = FB_BLANK_POWERDOWN;
 		backlight_update_status(ddata->backlight);
 	}
+
+	mutex_unlock(&ddata->lock);
 
 	dev_dbg(&ddata->pdev->dev, "disable done\n");
 }
@@ -437,7 +494,6 @@ static int pdsivm_probe_of(struct platform_device *pdev)
 	struct panel_drv_data *ddata = platform_get_drvdata(pdev);
 	struct device_node *node = pdev->dev.of_node;
 	struct omap_dss_device *in;
-	struct device_node *bl_node;
 	// int r;
 	// struct display_timing timing;
 	// struct videomode vm;
@@ -459,13 +515,10 @@ static int pdsivm_probe_of(struct platform_device *pdev)
 	}
 	ddata->cabc_gpio = gpio;
 
-	bl_node = of_parse_phandle(node, "backlight", 0);
-	if (bl_node) {
-		ddata->backlight = of_find_backlight_by_node(bl_node);
-		of_node_put(bl_node);
-
-		if (!ddata->backlight)
-			return -EPROBE_DEFER;
+	ddata->backlight_node = of_parse_phandle(node, "backlight", 0);
+	if (!fetch_backlight_device(ddata)) {
+		INIT_DELAYED_WORK(&ddata->backlight_work, backlight_fetch_work);
+		schedule_delayed_work(&ddata->backlight_work, HZ/2);
 	}
 
 /*	r = of_get_display_timing(node, "panel-timing", &timing);
@@ -555,6 +608,8 @@ static int __exit pdsivm_remove(struct platform_device *pdev)
 	struct omap_dss_device *in = ddata->in;
 
 	dev_dbg(&pdev->dev, "remove\n");
+
+	cancel_delayed_work(&ddata->backlight_work);
 
 	omapdss_unregister_display(dssdev);
 
