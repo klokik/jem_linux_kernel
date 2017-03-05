@@ -424,6 +424,11 @@
 &twl {
 	compatible = "ti,twl6032";
 
+	twl_pwrbutton: pwrbutton {
+		compatible = "ti,twl6030-pwrbutton";
+		interrupts = <0>;
+	};
+
 	vaux1: regulator-vaux1 {
 		compatible = "ti,twl6032-ldo2";
 		regulator-min-microvolt = <1000000>;
