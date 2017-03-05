@@ -313,6 +313,8 @@ static void backlight_fetch_work(struct work_struct *data)
 	struct panel_drv_data *ddata = container_of(data, struct panel_drv_data,
 								backlight_work.work);
 
+	mutex_lock(&ddata->lock);
+
 	if (!fetch_backlight_device(ddata)) {
 		schedule_delayed_work(&ddata->backlight_work, HZ/2);
 		return;
@@ -330,6 +332,8 @@ static void backlight_fetch_work(struct work_struct *data)
 	}
 
 	backlight_update_status(ddata->backlight);
+
+	mutex_unlock(&ddata->lock);
 }
 
 static int pdsivm_enable(struct omap_dss_device *dssdev)
@@ -391,14 +395,14 @@ static void pdsivm_disable(struct omap_dss_device *dssdev)
 
 	in->ops.dsi->bus_unlock(in);
 
-	mutex_unlock(&ddata->lock);
-
 	dssdev->state = OMAP_DSS_DISPLAY_DISABLED;
 
 	if (fetch_backlight_device(ddata)) {
 		ddata->backlight->props.power = FB_BLANK_POWERDOWN;
 		backlight_update_status(ddata->backlight);
 	}
+
+	mutex_unlock(&ddata->lock);
 
 	dev_dbg(&ddata->pdev->dev, "disable done\n");
 }
