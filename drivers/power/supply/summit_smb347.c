@@ -12,8 +12,8 @@
  * published by the Free Software Foundation.
  */
 
-#define DEBUG
-#define CONFIG_CHARGER_SMB347_DEBUG
+#undef DEBUG
+#undef CONFIG_CHARGER_SMB347_DEBUG
 #undef CONFIG_AMAZON_METRICS_LOG
 #define CONFIG_MACH_OMAP4_BOWSER_SUBTYPE_JEM
 
