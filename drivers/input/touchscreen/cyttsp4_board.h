@@ -31,18 +31,17 @@
 #include "board-bowser.h"
 #include "board-bowser-idme.h"
 #endif
-#include "mux.h"
 
 static int cyttsp4_hw_reset(void)
 {
 	int ret = 0;
-	gpio_set_value(GPIO_TOUCH_RESET, 1);
+	// gpio_set_value(GPIO_TOUCH_RESET, 1);
 	pr_info("%s: gpio_set_value(step%d)=%d\n", __func__, 1, 1);
 	msleep(20);
-	gpio_set_value(GPIO_TOUCH_RESET, 0);
+	// gpio_set_value(GPIO_TOUCH_RESET, 0);
 	pr_info("%s: gpio_set_value(step%d)=%d\n", __func__, 2, 0);
 	msleep(40);
-	gpio_set_value(GPIO_TOUCH_RESET, 1);
+	// gpio_set_value(GPIO_TOUCH_RESET, 1);
 	msleep(20);
 	pr_info("%s: gpio_set_value(step%d)=%d\n", __func__, 3, 1);
 
@@ -65,7 +64,8 @@ static int cyttsp4_hw_recov(int on)
 
 static int cyttsp4_irq_stat(void)
 {
-	return gpio_get_value(GPIO_TOUCH_IRQ);
+	// return gpio_get_value(GPIO_TOUCH_IRQ);
+	return 0;
 }
 
 #define CY_ABS_MIN_X 0
@@ -124,7 +124,7 @@ static struct touch_settings cyttsp4_sett_mdata = {
 
 #define CY_USE_INCLUDE_FBL
 #ifdef CY_USE_INCLUDE_FBL
-#include "linux/input/cyttsp4_img.h"
+#include "cyttsp4_img.h"
 static struct touch_firmware cyttsp4_firmware = {
 	.img = cyttsp4_img,
 	.size = sizeof(cyttsp4_img),
@@ -156,6 +156,10 @@ struct touch_framework cyttsp4_framework = {
 	.enable_vkeys = 1,
 };
 
+int is_good_panel(void) {
+	return 1;
+}
+
 struct touch_platform_data cyttsp4_i2c_touch_platform_data = {
 	.sett = {
 		NULL,	/* Reserved */
@@ -179,46 +183,46 @@ struct touch_platform_data cyttsp4_i2c_touch_platform_data = {
 	.hw_reset = cyttsp4_hw_reset,
 	.hw_recov = cyttsp4_hw_recov,
 	.irq_stat = cyttsp4_irq_stat,
-	.is_good_panel = idme_is_good_panel,
+	.is_good_panel = is_good_panel, //idme_is_good_panel,
 };
 
-void __init touch_gpio_init(void)
-{
-	int error;
+// void __init touch_gpio_init(void)
+// {
+// 	int error;
 
-	pr_info("%s: init touch gpio.\n", __func__);
-	/* touch gpio IRQ */
-	omap_mux_init_gpio(GPIO_TOUCH_IRQ, OMAP_PIN_INPUT_PULLUP);
+// 	pr_info("%s: init touch gpio.\n", __func__);
+// 	/* touch gpio IRQ */
+// 	omap_mux_init_gpio(GPIO_TOUCH_IRQ, OMAP_PIN_INPUT_PULLUP);
 
-	error = gpio_request(GPIO_TOUCH_IRQ, "touchscreen");
-	if (error < 0) {
-		pr_err("%s:failed to request GPIO %d, error %d\n",
-		       __func__, GPIO_TOUCH_IRQ, error);
-		return;
-	}
+// 	error = gpio_request(GPIO_TOUCH_IRQ, "touchscreen");
+// 	if (error < 0) {
+// 		pr_err("%s:failed to request GPIO %d, error %d\n",
+// 		       __func__, GPIO_TOUCH_IRQ, error);
+// 		return;
+// 	}
 
-	error = gpio_direction_input(GPIO_TOUCH_IRQ);
-	if (error < 0) {
-		pr_err("%s: GPIO configuration failed: GPIO %d,error %d\n",
-		       __func__, GPIO_TOUCH_IRQ, error);
-		gpio_free(GPIO_TOUCH_IRQ);
-	}
+// 	error = gpio_direction_input(GPIO_TOUCH_IRQ);
+// 	if (error < 0) {
+// 		pr_err("%s: GPIO configuration failed: GPIO %d,error %d\n",
+// 		       __func__, GPIO_TOUCH_IRQ, error);
+// 		gpio_free(GPIO_TOUCH_IRQ);
+// 	}
 
-	/* touch gpio RESET */
-	omap_mux_init_gpio(GPIO_TOUCH_RESET, OMAP_PIN_OUTPUT);
+// 	/* touch gpio RESET */
+// 	omap_mux_init_gpio(GPIO_TOUCH_RESET, OMAP_PIN_OUTPUT);
 
-	error = gpio_request(GPIO_TOUCH_RESET, "touchscreen");
-	if (error < 0) {
-		pr_err("%s:failed to request GPIO %d, error %d\n",
-		       __func__, GPIO_TOUCH_RESET, error);
-		return;
-	}
+// 	error = gpio_request(GPIO_TOUCH_RESET, "touchscreen");
+// 	if (error < 0) {
+// 		pr_err("%s:failed to request GPIO %d, error %d\n",
+// 		       __func__, GPIO_TOUCH_RESET, error);
+// 		return;
+// 	}
 
-	error = gpio_direction_output(GPIO_TOUCH_RESET, 1);
-	if (error < 0) {
-		pr_err("%s: GPIO configuration failed: GPIO %d,error %d\n",
-		       __func__, GPIO_TOUCH_RESET, error);
-		gpio_free(GPIO_TOUCH_RESET);
-	}
+// 	error = gpio_direction_output(GPIO_TOUCH_RESET, 1);
+// 	if (error < 0) {
+// 		pr_err("%s: GPIO configuration failed: GPIO %d,error %d\n",
+// 		       __func__, GPIO_TOUCH_RESET, error);
+// 		gpio_free(GPIO_TOUCH_RESET);
+// 	}
 
-}
+// }

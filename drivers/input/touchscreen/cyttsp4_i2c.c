@@ -91,6 +91,8 @@ static s32 cyttsp4_i2c_write_block_data(void *handle, u16 subaddr,
 	return (retval < 0) ? retval : retval != length ? -EIO : 0;
 }
 
+#include "cyttsp4_board.h"
+
 static int cyttsp4_i2c_probe(struct i2c_client *client,
 	const struct i2c_device_id *id)
 {
@@ -120,6 +122,7 @@ static int cyttsp4_i2c_probe(struct i2c_client *client,
 	ts->ops.read = cyttsp4_i2c_read_block_data;
 	ts->ops.dev = &client->dev;
 	ts->ops.dev->bus = &i2c_bus_type;
+	ts->ops.dev->platform_data = &cyttsp4_i2c_touch_platform_data;
 
 	ts->ttsp_client = cyttsp4_core_init(&ts->ops, &client->dev,
 		client->irq, client->name);
@@ -177,6 +180,7 @@ static int cyttsp4_i2c_resume(struct i2c_client *client)
 static const struct i2c_device_id cyttsp4_i2c_id[] = {
 	{ CY_I2C_NAME, 0 },  { }
 };
+MODULE_DEVICE_TABLE(i2c, cyttsp4_i2c_id);
 
 static struct i2c_driver cyttsp4_i2c_driver = {
 	.driver = {
@@ -200,21 +204,9 @@ static struct i2c_driver cyttsp4_i2c_driver = {
 #endif
 };
 
-static int __init cyttsp4_i2c_init(void)
-{
-	return i2c_add_driver(&cyttsp4_i2c_driver);
-}
-
-static void __exit cyttsp4_i2c_exit(void)
-{
-	return i2c_del_driver(&cyttsp4_i2c_driver);
-}
-
-module_init(cyttsp4_i2c_init);
-module_exit(cyttsp4_i2c_exit);
+module_i2c_driver(cyttsp4_i2c_driver);
 
 MODULE_ALIAS(CY_I2C_NAME);
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Cypress TrueTouch(R) Standard Product (TTSP) I2C driver");
 MODULE_AUTHOR("Cypress");
-MODULE_DEVICE_TABLE(i2c, cyttsp4_i2c_id);
