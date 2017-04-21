@@ -22,6 +22,8 @@
  *
  */
 
+#define DEBUG
+#define VERBOSE_DEBUG
 #include "cyttsp4_core.h"
 #include <linux/delay.h>
 #include <linux/gpio.h>
@@ -30,6 +32,8 @@
 #include <linux/pm_runtime.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
+
+#include <linux/i2c.h>
 
 /* Timeout in ms. */
 #define CY_CORE_REQUEST_EXCLUSIVE_TIMEOUT	500
@@ -129,13 +133,19 @@ static int cyttsp4_hw_soft_reset(struct cyttsp4 *cd)
 
 static int cyttsp4_hw_hard_reset(struct cyttsp4 *cd)
 {
-	if (cd->cpdata->xres) {
-		cd->cpdata->xres(cd->cpdata, cd->dev);
-		dev_dbg(cd->dev, "%s: execute HARD reset\n", __func__);
-		return 0;
-	}
-	dev_err(cd->dev, "%s: FAILED to execute HARD reset\n", __func__);
-	return -ENOSYS;
+	gpiod_set_value(cd->touch_reset, 1);
+	dev_dbg(cd->dev, "%s: hw reset step 1\n", __func__);
+	msleep(20);
+
+	gpiod_set_value(cd->touch_reset, 0);
+	dev_dbg(cd->dev, "%s: hw reset step 2\n", __func__);
+	msleep(40);
+
+	gpiod_set_value(cd->touch_reset, 1);
+	dev_dbg(cd->dev, "%s: hw reset step 3\n", __func__);
+	msleep(20);
+
+	return 0;
 }
 
 static int cyttsp4_hw_reset(struct cyttsp4 *cd)
@@ -1043,6 +1053,14 @@ static int cyttsp4_mt_attention(struct cyttsp4 *cd)
 	return rc;
 }
 
+static void cyttsp4_set_i2c_addr(struct cyttsp4 *cd, u16 addr)
+{
+	struct i2c_client *client = to_i2c_client(cd->dev);
+
+	client->addr = addr;
+}
+
+
 static irqreturn_t cyttsp4_irq(int irq, void *handle)
 {
 	struct cyttsp4 *cd = handle;
@@ -1072,11 +1090,20 @@ static irqreturn_t cyttsp4_irq(int irq, void *handle)
 
 	rc = cyttsp4_adap_read(cd, CY_REG_BASE, sizeof(mode), mode);
 	if (rc) {
-		dev_err(cd->dev, "%s: Fail read adapter r=%d\n", __func__, rc);
-		goto cyttsp4_irq_exit;
+		dev_vdbg(dev, "%s: Retry irq read using ldr address\n", __func__);
+		rc = cyttsp4_adap_read_bl(cd, CY_REG_BASE, sizeof(mode), mode);
+		if (rc) {
+			dev_err(cd->dev, "%s: Fail read adapter r=%d\n", __func__, rc);
+			goto cyttsp4_irq_exit;
+		}
 	}
 	dev_vdbg(dev, "%s mode[0-2]:0x%X 0x%X 0x%X\n", __func__,
 			mode[0], mode[1], mode[2]);
+
+	if ((mode[0] == 0xFF) && (cd->mode == CY_MODE_BOOTLOADER)) {
+		dev_vdbg(dev, "%s: False interrupt in bl mode\n", __func__);
+		goto cyttsp4_irq_exit;
+	}
 
 	if (IS_BOOTLOADER(mode[0], mode[1])) {
 		cur_mode = CY_MODE_BOOTLOADER;
@@ -1207,7 +1234,7 @@ cyttsp4_irq_handshake:
 	 * IRQF_TRIGGER_LOW in order to delay until the
 	 * device completes isr deassert
 	 */
-	udelay(cd->cpdata->level_irq_udelay);
+	udelay(cd->level_irq_udelay);
 
 cyttsp4_irq_exit:
 	mutex_unlock(&cd->system_lock);
@@ -1499,7 +1526,7 @@ static int cyttsp4_core_sleep_(struct cyttsp4 *cd)
 
 	if (IS_BOOTLOADER(mode[0], mode[1])) {
 		mutex_unlock(&cd->system_lock);
-		dev_err(cd->dev, "%s: Device in BOOTLOADER mode.\n", __func__);
+		dev_err(cd->dev, "%s: Device in BOOTLADER mode.\n", __func__);
 		rc = -EINVAL;
 		goto error;
 	}
@@ -1572,7 +1599,7 @@ reset:
 	cd->int_status &= ~CY_INT_IGNORE;
 	cd->int_status |= CY_INT_MODE_CHANGE;
 
-	rc = cyttsp4_adap_write(cd, CY_REG_BASE, sizeof(ldr_exit),
+	rc = cyttsp4_adap_write_bl(cd, CY_REG_BASE, sizeof(ldr_exit),
 			(u8 *)ldr_exit);
 	mutex_unlock(&cd->system_lock);
 	if (rc < 0) {
@@ -1993,61 +2020,134 @@ error_alloc_failed:
 	return rc;
 }
 
+
+#define CY_MAXX 1296
+#define CY_MAXY 805
+
+#define CY_ABS_MIN_X 0
+#define CY_ABS_MIN_Y 0
+#define CY_ABS_MIN_P 0
+#define CY_ABS_MIN_W 0
+#define CY_ABS_MIN_T 1
+#define CY_ABS_MAX_X CY_MAXX
+#define CY_ABS_MAX_Y CY_MAXY
+#define CY_ABS_MAX_P 255
+#define CY_ABS_MAX_W 255
+#define CY_ABS_MAX_T 10
+#define CY_IGNORE_VALUE 0xFFFF
+
+static const uint16_t cyttsp4_abs[] = {
+	ABS_MT_POSITION_X, CY_ABS_MIN_X, CY_ABS_MAX_X, 0, 0,
+	ABS_MT_POSITION_Y, CY_ABS_MIN_Y, CY_ABS_MAX_Y, 0, 0,
+	ABS_MT_PRESSURE, CY_ABS_MIN_P, CY_ABS_MAX_P, 0, 0,
+//	CY_IGNORE_VALUE/*ABS_MT_TOUCH_MAJOR*/, CY_ABS_MIN_W, CY_ABS_MAX_W, 0, 0,
+	ABS_MT_TOUCH_MAJOR, CY_ABS_MIN_W, CY_ABS_MAX_W, 0, 0,
+	ABS_MT_TRACKING_ID, CY_ABS_MIN_T, CY_ABS_MAX_T, 0, 0,
+};
+
+struct touch_framework cyttsp4_framework = {
+	.abs = (uint16_t *)&cyttsp4_abs[0],
+	.size = sizeof(cyttsp4_abs)/sizeof(uint16_t),
+	.enable_vkeys = 1,
+};
+
+static int cyttsp4_probe_of(struct cyttsp4 *cd)
+{
+	cd->touch_reset = devm_gpiod_get_optional(cd->dev,
+						     "reset", GPIOD_OUT_LOW);
+	if (IS_ERR(cd->touch_reset))
+		return PTR_ERR(cd->touch_reset);
+
+	device_property_read_u32_array(cd->dev, "irq-delay",
+		&cd->level_irq_udelay, 1);
+
+	cd->mode = CY_MODE_UNKNOWN;
+
+	cd->pdata = devm_kzalloc(cd->dev, sizeof(*cd->cpdata), GFP_KERNEL);
+
+	/* Set Core pdata */
+	cd->pdata->core_pdata = devm_kzalloc(cd->dev,
+		sizeof(*cd->pdata->core_pdata), GFP_KERNEL);
+	cd->pdata->core_pdata->init = NULL;
+	cd->pdata->core_pdata->power = NULL;
+	// TODO: set settings (cd->core_pdata->sett)
+
+
+	/* Set MT pdata */
+	cd->pdata->mt_pdata = devm_kzalloc(cd->dev,
+		sizeof(*cd->pdata->mt_pdata), GFP_KERNEL);
+
+	cd->pdata->mt_pdata->frmwrk = &cyttsp4_framework;
+	cd->pdata->mt_pdata->flags = CY_FLAG_INV_Y | CY_FLAG_VKEYS;
+	device_property_read_string(cd->dev, "input-name",
+		&cd->pdata->mt_pdata->inp_dev_name);
+
+	return 0;
+}
+
 struct cyttsp4 *cyttsp4_probe(const struct cyttsp4_bus_ops *ops,
 		struct device *dev, u16 irq, size_t xfer_buf_size)
 {
 	struct cyttsp4 *cd;
-	struct cyttsp4_platform_data *pdata = dev_get_platdata(dev);
+	// struct cyttsp4_platform_data *pdata;
 	unsigned long irq_flags;
 	int rc = 0;
 
-	if (!pdata || !pdata->core_pdata || !pdata->mt_pdata) {
-		dev_err(dev, "%s: Missing platform data\n", __func__);
-		rc = -ENODEV;
-		goto error_no_pdata;
-	}
-
-	cd = kzalloc(sizeof(*cd), GFP_KERNEL);
+	printk(KERN_EMERG "--------- cyttsp4: trace 1\n");
+	cd = devm_kzalloc(dev, sizeof(*cd), GFP_KERNEL);
 	if (!cd) {
 		dev_err(dev, "%s: Error, kzalloc\n", __func__);
-		rc = -ENOMEM;
-		goto error_alloc_data;
+		return ERR_PTR(-ENOMEM);
 	}
-
-	cd->xfer_buf = kzalloc(xfer_buf_size, GFP_KERNEL);
+	printk(KERN_EMERG "--------- cyttsp4: trace 2\n");
+	cd->xfer_buf = devm_kzalloc(dev, xfer_buf_size, GFP_KERNEL);
 	if (!cd->xfer_buf) {
 		dev_err(dev, "%s: Error, kzalloc\n", __func__);
-		rc = -ENOMEM;
-		goto error_free_cd;
+		return ERR_PTR(-ENOMEM);
+	}
+
+	printk(KERN_EMERG "--------- cyttsp4: trace 3\n");
+	/* Initialize device info */
+	cd->dev = dev;
+	cd->bus_ops = ops;
+	cd->irq = irq;
+
+	if (dev->of_node) {
+		dev_dbg(dev, "%s: of_node present\n", __func__);
+		cyttsp4_probe_of(cd);
+	}
+	else {
+		dev_err(dev, "%s: Missing platform data\n", __func__);
+		return ERR_PTR(-ENODEV);
 	}
 
 	/* Initialize device info */
-	cd->dev = dev;
-	cd->pdata = pdata;
-	cd->cpdata = pdata->core_pdata;
-	cd->bus_ops = ops;
+	cd->cpdata = cd->pdata->core_pdata;
 
+	printk(KERN_EMERG "--------- cyttsp4: trace 4\n");
 	/* Initialize mutexes and spinlocks */
 	mutex_init(&cd->system_lock);
 	mutex_init(&cd->adap_lock);
 
+	printk(KERN_EMERG "--------- cyttsp4: trace 5\n");
 	/* Initialize wait queue */
 	init_waitqueue_head(&cd->wait_q);
 
 	/* Initialize works */
+	printk(KERN_EMERG "--------- cyttsp4: trace 6\n");
 	INIT_WORK(&cd->startup_work, cyttsp4_startup_work_function);
 	INIT_WORK(&cd->watchdog_work, cyttsp4_watchdog_work);
 
 	/* Initialize IRQ */
-	cd->irq = gpio_to_irq(cd->cpdata->irq_gpio);
-	if (cd->irq < 0) {
-		rc = -EINVAL;
-		goto error_free_xfer;
-	}
+	// cd->irq = gpio_to_irq(cd->cpdata->irq_gpio);
+	// if (cd->irq < 0)
+	// 	return ERR_PTR(-EINVAL);
 
+	printk(KERN_EMERG "--------- cyttsp4: trace 7\n");
 	dev_set_drvdata(dev, cd);
 
 	/* Call platform init function */
+	printk(KERN_EMERG "--------- cyttsp4: trace 8\n");
 	if (cd->cpdata->init) {
 		dev_dbg(cd->dev, "%s: Init HW\n", __func__);
 		rc = cd->cpdata->init(cd->cpdata, 1, cd->dev);
@@ -2058,17 +2158,22 @@ struct cyttsp4 *cyttsp4_probe(const struct cyttsp4_bus_ops *ops,
 	if (rc < 0)
 		dev_err(cd->dev, "%s: HW Init fail r=%d\n", __func__, rc);
 
+	printk(KERN_EMERG "--------- cyttsp4: trace 9\n");
 	dev_dbg(dev, "%s: initialize threaded irq=%d\n", __func__, cd->irq);
-	if (cd->cpdata->level_irq_udelay > 0)
+	if (cd->level_irq_udelay > 0)
 		/* use level triggered interrupts */
 		irq_flags = IRQF_TRIGGER_LOW | IRQF_ONESHOT;
 	else
 		/* use edge triggered interrupts */
 		irq_flags = IRQF_TRIGGER_FALLING | IRQF_ONESHOT;
 
+	printk(KERN_EMERG "--------- cyttsp4: trace 10\n");
 	rc = request_threaded_irq(cd->irq, NULL, cyttsp4_irq, irq_flags,
 		dev_name(dev), cd);
-	if (rc < 0) {
+	// irq_flags = 0; // to use DT flag
+	// rc = devm_request_irq(cd->dev, cd->irq, cyttsp4_irq, irq_flags,
+	// 			       "touch_irq", cd->dev);
+	if (rc) {
 		dev_err(dev, "%s: Error, could not request irq\n", __func__);
 		goto error_request_irq;
 	}
@@ -2081,6 +2186,7 @@ struct cyttsp4 *cyttsp4_probe(const struct cyttsp4_bus_ops *ops,
 	 * call startup directly to ensure that the device
 	 * is tested before leaving the probe
 	 */
+	printk(KERN_EMERG "--------- cyttsp4: trace 11\n");
 	rc = cyttsp4_startup(cd);
 
 	/* Do not fail probe if startup fails but the device is detected */
@@ -2090,31 +2196,32 @@ struct cyttsp4 *cyttsp4_probe(const struct cyttsp4_bus_ops *ops,
 		goto error_startup;
 	}
 
+	printk(KERN_EMERG "--------- cyttsp4: trace 12\n");
 	rc = cyttsp4_mt_probe(cd);
 	if (rc < 0) {
 		dev_err(dev, "%s: Error, fail mt probe\n", __func__);
 		goto error_startup;
 	}
 
+	printk(KERN_EMERG "--------- cyttsp4: trace 13\n");
 	pm_runtime_enable(dev);
 
 	return cd;
 
 error_startup:
+	printk(KERN_EMERG "--------- cyttsp4: trace 14\n");
 	cancel_work_sync(&cd->startup_work);
+	printk(KERN_EMERG "--------- cyttsp4: trace 15\n");
 	cyttsp4_stop_wd_timer(cd);
+	printk(KERN_EMERG "--------- cyttsp4: trace 16\n");
 	pm_runtime_disable(dev);
+	printk(KERN_EMERG "--------- cyttsp4: trace 17\n");
 	cyttsp4_free_si_ptrs(cd);
+	printk(KERN_EMERG "--------- cyttsp4: trace 18\n");
 	free_irq(cd->irq, cd);
 error_request_irq:
 	if (cd->cpdata->init)
 		cd->cpdata->init(cd->cpdata, 0, dev);
-error_free_xfer:
-	kfree(cd->xfer_buf);
-error_free_cd:
-	kfree(cd);
-error_alloc_data:
-error_no_pdata:
 	dev_err(dev, "%s failed.\n", __func__);
 	return ERR_PTR(rc);
 }
@@ -2147,7 +2254,6 @@ int cyttsp4_remove(struct cyttsp4 *cd)
 	if (cd->cpdata->init)
 		cd->cpdata->init(cd->cpdata, 0, dev);
 	cyttsp4_free_si_ptrs(cd);
-	kfree(cd);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(cyttsp4_remove);

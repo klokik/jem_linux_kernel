@@ -349,6 +349,8 @@ struct cyttsp4 {
 	int int_status;
 	wait_queue_head_t wait_q;
 	int irq;
+	int level_irq_udelay;
+	struct gpio_desc *touch_reset;
 	struct work_struct startup_work;
 	struct work_struct watchdog_work;
 	struct timer_list watchdog_timer;
@@ -372,6 +374,10 @@ struct cyttsp4_bus_ops {
 	int (*write)(struct device *dev, u8 *xfer_buf, u16 addr, u8 length,
 			const void *values);
 	int (*read)(struct device *dev, u8 *xfer_buf, u16 addr, u8 length,
+			void *values);
+	int (*write_bl)(struct device *dev, u8 *xfer_buf, u16 addr, u8 length,
+			const void *values);
+	int (*read_bl)(struct device *dev, u8 *xfer_buf, u16 addr, u8 length,
 			void *values);
 };
 
@@ -460,12 +466,28 @@ static inline int cyttsp4_adap_write(struct cyttsp4 *ts, u16 addr, int size,
 	return ts->bus_ops->write(ts->dev, ts->xfer_buf, addr, size, buf);
 }
 
+static inline int cyttsp4_adap_read_bl(struct cyttsp4 *ts, u16 addr, int size,
+		void *buf)
+{
+	return ts->bus_ops->read_bl(ts->dev, ts->xfer_buf, addr, size, buf);
+}
+
+static inline int cyttsp4_adap_write_bl(struct cyttsp4 *ts, u16 addr, int size,
+		const void *buf)
+{
+	return ts->bus_ops->write_bl(ts->dev, ts->xfer_buf, addr, size, buf);
+}
+
 extern struct cyttsp4 *cyttsp4_probe(const struct cyttsp4_bus_ops *ops,
 		struct device *dev, u16 irq, size_t xfer_buf_size);
 extern int cyttsp4_remove(struct cyttsp4 *ts);
 int cyttsp_i2c_write_block_data(struct device *dev, u8 *xfer_buf, u16 addr,
 		u8 length, const void *values);
 int cyttsp_i2c_read_block_data(struct device *dev, u8 *xfer_buf, u16 addr,
+		u8 length, void *values);
+int cyttsp_i2c_write_block_data_bl(struct device *dev, u8 *xfer_buf, u16 addr,
+		u8 length, const void *values);
+int cyttsp_i2c_read_block_data_bl(struct device *dev, u8 *xfer_buf, u16 addr,
 		u8 length, void *values);
 extern const struct dev_pm_ops cyttsp4_pm_ops;
 
