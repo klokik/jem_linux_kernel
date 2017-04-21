@@ -27,15 +27,15 @@
  *
  */
 #include "cyttsp4_core.h"
+#include "cyttsp4_platform.h"
 
 #include <linux/delay.h>
 #include <linux/gpio.h>
 #include <linux/interrupt.h>
 #include <linux/slab.h>
-#include <linux/input/touch_platform.h>
 #include <linux/firmware.h>	/* This enables firmware class loader code */
 #include <linux/module.h>
-#include <linux/trapz.h> /* ACOS_MOD_ONELINE */
+// #include <linux/trapz.h> /* ACOS_MOD_ONELINE */
 
 /* platform address lookup offsets */
 #define CY_TCH_ADDR_OFS		0
@@ -796,7 +796,7 @@ static int _cyttsp4_wait_int(struct cyttsp4 *ts, unsigned long timeout_ms)
 {
 	int retval = 0;
 
-	INIT_COMPLETION(ts->int_running);
+	reinit_completion(&ts->int_running);
 	retval = _cyttsp4_wait_int_no_init(ts, timeout_ms);
 	if (retval < 0) {
 		dev_err(ts->dev,
@@ -924,7 +924,7 @@ static int _cyttsp4_put_cmd_wait(struct cyttsp4 *ts, u16 ofs,
 	mutex_unlock(&ts->data_lock);
 	mutex_lock(&ts->data_lock);
 	_cyttsp4_change_state(ts, cmd_state);
-	INIT_COMPLETION(ts->int_running);
+	reinit_completion(&ts->int_running);
 	mutex_unlock(&ts->data_lock);
 	retval = _cyttsp4_write_block_data(ts, ofs, cmd_len,
 		cmd_buf, i2c_addr, use_subaddr);
@@ -955,7 +955,7 @@ _cyttsp4_put_cmd_wait_retry:
 			retval = -ETIMEDOUT;
 		} else {
 			if (tries++ < 2) {
-				INIT_COMPLETION(ts->int_running);
+				reinit_completion(&ts->int_running);
 				mutex_unlock(&ts->data_lock);
 				goto _cyttsp4_put_cmd_wait_retry;
 			} else {
@@ -1649,7 +1649,7 @@ static int _cyttsp4_set_mode(struct cyttsp4 *ts, u8 new_mode)
 	case CY_OPERATE_MODE:
 		new_cur_mode = CY_MODE_OPERATIONAL;
 		mode = "operational";
-		INIT_COMPLETION(ts->ready_int_running);
+		reinit_completion(&ts->ready_int_running);
 		_cyttsp4_change_state(ts, CY_READY_STATE);
 		new_state = CY_ACTIVE_STATE;
 		break;
@@ -2885,12 +2885,13 @@ static void _cyttsp4_get_mt_touches(struct cyttsp4 *ts, int num_cur_tch)
 			mt_sync_count++;
 		}
 		/* ACOS_MOD_BEGIN */
-		TRAPZ_DESCRIBE(TRAPZ_KERN_INP_TOUCH, CypressTouchEvent,
+/*		TRAPZ_DESCRIBE(TRAPZ_KERN_INP_TOUCH, CypressTouchEvent,
 			"Touch event in Cypress touch driver");
 		TRAPZ_LOG_PRINTF(TRAPZ_LOG_DEBUG, 0, TRAPZ_KERN_INP_TOUCH,
 			CypressTouchEvent, "X=%d Y=%d P=%d",
 			touch.abs[CY_TCH_X], touch.abs[CY_TCH_Y],
 			touch.abs[CY_TCH_P], 0);
+*/
 		/* ACOS_MOD_END */
 _cyttsp4_get_mt_touches_pr_tch:
 #ifdef CY_USE_TMA400_SP2
@@ -3410,7 +3411,7 @@ static int _cyttsp4_wakeup(struct cyttsp4 *ts)
 			enable_irq(ts->irq);
 
 		_cyttsp4_change_state(ts, CY_CMD_STATE);
-		INIT_COMPLETION(ts->int_running);
+		reinit_completion(&ts->int_running);
 		if (ts->platform_data->hw_recov == NULL) {
 			dev_vdbg(ts->dev,
 				"%s: no hw_recov function\n", __func__);
@@ -4097,7 +4098,7 @@ cyttsp4_charger_hdmi_store_error_exit:
 	retval = size;
 	return retval;
 }
-static DEVICE_ATTR(charger_hdmi, S_IRWXU | S_IRWXG | S_IRWXO,
+static DEVICE_ATTR(charger_hdmi, S_IRUGO,//S_IRWXU | S_IRWXG | S_IRWXO,
 	cyttsp4_charger_hdmi_show, cyttsp4_charger_hdmi_store);
 
 
@@ -4253,7 +4254,7 @@ cyttsp4_ic_grpnum_store_error_exit:
 	mutex_unlock(&(ts->data_lock));
 	return retval;
 }
-static DEVICE_ATTR(ic_grpnum, S_IRWXU | S_IRWXG | S_IRWXO,
+static DEVICE_ATTR(ic_grpnum, S_IRUGO,//S_IRWXU | S_IRWXG | S_IRWXO,
 	cyttsp4_ic_grpnum_show, cyttsp4_ic_grpnum_store);
 
 /* Group Offset */
@@ -4298,7 +4299,7 @@ cyttsp4_ic_grpoffset_store_error_exit:
 	mutex_unlock(&(ts->data_lock));
 	return retval;
 }
-static DEVICE_ATTR(ic_grpoffset, S_IRWXU | S_IRWXG | S_IRWXO,
+static DEVICE_ATTR(ic_grpoffset, S_IRUGO,//S_IRWXU | S_IRWXG | S_IRWXO,
 	cyttsp4_ic_grpoffset_show, cyttsp4_ic_grpoffset_store);
 
 
@@ -5166,7 +5167,7 @@ cyttsp4_ic_grpdata_store_tch_wrerr:
 			"%s: Fail write host_mode=%02X"
 					" r=%d\n", __func__, ic_buf[2], retval);
 				} else {
-					INIT_COMPLETION(ts->int_running);
+					reinit_completion(&ts->int_running);
 					retval = _cyttsp4_wait_int_no_init(ts,
 						CY_HALF_SEC_TMO_MS * 5);
 					if (retval < 0) {
@@ -5259,7 +5260,7 @@ static ssize_t cyttsp4_ic_grpdata_store(struct device *dev,
 
 	return retval;
 }
-static DEVICE_ATTR(ic_grpdata, S_IRWXU | S_IRWXG | S_IRWXO,
+static DEVICE_ATTR(ic_grpdata, S_IRUGO,//S_IRWXU | S_IRWXG | S_IRWXO,
 	cyttsp4_ic_grpdata_show, cyttsp4_ic_grpdata_store);
 
 static ssize_t cyttsp4_drv_flags_show(struct device *dev,
@@ -5556,7 +5557,7 @@ static int _cyttsp4_send_cmd(struct cyttsp4 *ts, const u8 *cmd_buf,
 
 	mutex_unlock(&ts->data_lock);
 	if (timeout_ms > 0)
-		INIT_COMPLETION(ts->int_running);
+		reinit_completion(&ts->int_running);
 	retval = _cyttsp4_write_block_data(ts, CY_REG_BASE, cmd_size, cmd_buf,
 		ts->platform_data->addr[CY_LDR_ADDR_OFS],
 #ifdef CY_USE_TMA400
@@ -5727,7 +5728,7 @@ static int _cyttsp4_ldr_enter(struct cyttsp4 *ts, struct cyttsp4_dev_id *dev_id)
 	ldr_enter_cmd[i++] = CY_END_OF_PACKET;
 
 	mutex_unlock(&ts->data_lock);
-	INIT_COMPLETION(ts->int_running);
+	reinit_completion(&ts->int_running);
 	retval = _cyttsp4_write_block_data(ts, CY_REG_BASE, cmd_size,
 		ldr_enter_cmd, ts->platform_data->addr[CY_LDR_ADDR_OFS],
 #ifdef CY_USE_TMA400
@@ -7284,7 +7285,7 @@ _cyttsp4_startup_start:
 		goto _cyttsp4_startup_exit;
 	}
 
-	INIT_COMPLETION(ts->si_int_running);
+	reinit_completion(&ts->si_int_running);
 	_cyttsp4_change_state(ts, CY_EXIT_BL_STATE);
 	ts->switch_flag = true;
 	retval = _cyttsp4_wait_si_int(ts, CY_TEN_SEC_TMO_MS);
