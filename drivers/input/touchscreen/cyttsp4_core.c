@@ -26,7 +26,7 @@
  * Contact Cypress Semiconductor at www.cypress.com <kev@cypress.com>
  *
  */
-#define DEBUG
+#undef DEBUG
 
 #include "cyttsp4_core.h"
 #include "cyttsp4_platform.h"
