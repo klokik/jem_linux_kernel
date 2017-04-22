@@ -602,6 +602,7 @@
 		ldr-address = <0x69>;
 
 		reset-gpios = <&gpio1 23 GPIO_ACTIVE_HIGH>;
+		irq-gpios = <&gpio1 24 GPIO_ACTIVE_HIGH>;
 
 		input-name = "cyttsp4_i2c_adapter";
 		// touchscreen-size-x = <800>;

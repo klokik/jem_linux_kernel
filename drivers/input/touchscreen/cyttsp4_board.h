@@ -32,41 +32,6 @@
 #include "board-bowser-idme.h"
 #endif
 
-static int cyttsp4_hw_reset(void)
-{
-	int ret = 0;
-	// gpio_set_value(GPIO_TOUCH_RESET, 1);
-	pr_info("%s: gpio_set_value(step%d)=%d\n", __func__, 1, 1);
-	msleep(20);
-	// gpio_set_value(GPIO_TOUCH_RESET, 0);
-	pr_info("%s: gpio_set_value(step%d)=%d\n", __func__, 2, 0);
-	msleep(40);
-	// gpio_set_value(GPIO_TOUCH_RESET, 1);
-	msleep(20);
-	pr_info("%s: gpio_set_value(step%d)=%d\n", __func__, 3, 1);
-
-	return ret;
-}
-
-static int cyttsp4_hw_recov(int on)
-{
-	int retval = 0;
-
-	pr_info("%s: on=%d\n", __func__, on);
-	if (on == 0) {
-		cyttsp4_hw_reset();
-		retval = 0;
-	} else
-		retval = -ENOSYS;
-
-	return retval;
-}
-
-static int cyttsp4_irq_stat(void)
-{
-	// return gpio_get_value(GPIO_TOUCH_IRQ);
-	return 0;
-}
 
 #define CY_ABS_MIN_X 0
 #define CY_ABS_MIN_Y 0
@@ -180,9 +145,9 @@ struct touch_platform_data cyttsp4_i2c_touch_platform_data = {
 	.frmwrk = &cyttsp4_framework,
 	.addr = {CY_I2C_TCH_ADR, CY_I2C_LDR_ADR},
 	.flags = /*0x01 | 0x02 | */0x20 | 0x40,
-	.hw_reset = cyttsp4_hw_reset,
-	.hw_recov = cyttsp4_hw_recov,
-	.irq_stat = cyttsp4_irq_stat,
+//	.hw_reset = cyttsp4_hw_reset,
+//	.hw_recov = cyttsp4_hw_recov,
+//	.irq_stat = cyttsp4_irq_stat,
 	.is_good_panel = is_good_panel, //idme_is_good_panel,
 };
 

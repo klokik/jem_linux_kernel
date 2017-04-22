@@ -26,6 +26,8 @@
  * Contact Cypress Semiconductor at www.cypress.com <kev@cypress.com>
  *
  */
+#define DEBUG
+
 #include "cyttsp4_core.h"
 #include "cyttsp4_platform.h"
 
@@ -543,6 +545,8 @@ struct cyttsp4_dbg_pkg {
 struct cyttsp4 {
 	struct device *dev;
 	int irq;
+	struct gpio_desc *touch_reset;
+	struct gpio_desc *touch_irq;
 	struct input_dev *input;
 	struct mutex data_lock;		/* prevent concurrent accesses */
 	struct workqueue_struct		*cyttsp4_wq;
@@ -3283,22 +3287,38 @@ static int _cyttsp4_soft_reset(struct cyttsp4 *ts)
 		ts->platform_data->addr[CY_TCH_ADDR_OFS], true);
 }
 
+static int _cyttsp4_hw_reset(struct cyttsp4 *ts)
+{
+	int ret = 0;
+	gpiod_set_value(ts->touch_reset, 1);
+	pr_info("%s: gpio_set_value(step%d)=%d\n", __func__, 1, 1);
+	msleep(20);
+	gpiod_set_value(ts->touch_reset, 0);
+	pr_info("%s: gpio_set_value(step%d)=%d\n", __func__, 2, 0);
+	msleep(40);
+	gpiod_set_value(ts->touch_reset, 1);
+	msleep(20);
+	pr_info("%s: gpio_set_value(step%d)=%d\n", __func__, 3, 1);
+
+	return ret;
+}
+
 static int _cyttsp4_reset(struct cyttsp4 *ts)
 {
 	enum cyttsp4_driver_state tmp_state = ts->driver_state;
 	int retval = 0;
 
-	if (ts->platform_data->hw_reset) {
-		retval = ts->platform_data->hw_reset();
+	// if (ts->platform_data->hw_reset) {
+		retval = _cyttsp4_hw_reset(ts);
 		if (retval == -ENOSYS) {
 			retval = _cyttsp4_soft_reset(ts);
 			ts->soft_reset_asserted = true;
 		} else
 			ts->soft_reset_asserted = false;
-	} else {
+/*	} else {
 		retval = _cyttsp4_soft_reset(ts);
 		ts->soft_reset_asserted = true;
-	}
+	}*/
 
 	if (retval < 0) {
 		_cyttsp4_pr_state(ts);
@@ -3387,6 +3407,20 @@ static int _cyttsp4_enter_sleep(struct cyttsp4 *ts)
 	return retval;
 }
 
+static int _cyttsp4_hw_recov(struct cyttsp4 *ts, int on)
+{
+	int retval = 0;
+
+	pr_info("%s: on=%d\n", __func__, on);
+	if (on == 0) {
+		_cyttsp4_hw_reset(ts);
+		retval = 0;
+	} else
+		retval = -ENOSYS;
+
+	return retval;
+}
+
 static int _cyttsp4_wakeup(struct cyttsp4 *ts)
 {
 	int retval = 0;
@@ -3412,25 +3446,19 @@ static int _cyttsp4_wakeup(struct cyttsp4 *ts)
 
 		_cyttsp4_change_state(ts, CY_CMD_STATE);
 		reinit_completion(&ts->int_running);
-		if (ts->platform_data->hw_recov == NULL) {
-			dev_vdbg(ts->dev,
-				"%s: no hw_recov function\n", __func__);
-			retval = -ENOSYS;
-		} else {
-			/* wake using strobe on host alert pin */
-			retval = ts->platform_data->hw_recov(wake);
-			if (retval < 0) {
-				if (retval == -ENOSYS) {
-					dev_vdbg(ts->dev,
-						"%s: no hw_recov wake code=%d"
-						" function\n", __func__, wake);
-				} else {
-					dev_err(ts->dev,
-				"%s: fail hw_recov(wake=%d)"
-						" function r=%d\n",
-						__func__, wake, retval);
-					retval = -ENOSYS;
-				}
+		/* wake using strobe on host alert pin */
+		retval = _cyttsp4_hw_recov(ts, wake);
+		if (retval < 0) {
+			if (retval == -ENOSYS) {
+				dev_vdbg(ts->dev,
+					"%s: no hw_recov wake code=%d"
+					" function\n", __func__, wake);
+			} else {
+				dev_err(ts->dev,
+			"%s: fail hw_recov(wake=%d)"
+					" function r=%d\n",
+					__func__, wake, retval);
+				retval = -ENOSYS;
 			}
 		}
 
@@ -5340,13 +5368,15 @@ static ssize_t cyttsp4_hw_recov_store(struct device *dev,
 		goto cyttsp4_hw_recov_store_error_exit;
 	}
 
+#if 0
 	if (ts->platform_data->hw_recov == NULL) {
 		dev_err(ts->dev,
 			"%s: no hw_recov function\n", __func__);
 		goto cyttsp4_hw_recov_store_error_exit;
 	}
+#endif
 
-	retval = ts->platform_data->hw_recov((int)value);
+	retval = _cyttsp4_hw_recov(ts, (int)value);
 	if (retval < 0) {
 		dev_err(ts->dev,
 			"%s: fail hw_recov(value=%d) function r=%d\n",
@@ -7244,6 +7274,12 @@ static void _cyttsp4_file_free(struct cyttsp4 *ts)
 #ifdef CY_USE_TMA884
 #define CY_IRQ_DEASSERT	1
 #define CY_IRQ_ASSERT	0
+
+static int _cyttsp4_irq_stat(struct cyttsp4 *ts)
+{
+	return gpiod_get_value(ts->touch_irq);
+}
+
 static int _cyttsp4_startup(struct cyttsp4 *ts)
 {
 	int retval = 0;
@@ -7307,9 +7343,10 @@ _cyttsp4_startup_start:
 	/* Wait for IRQ to toggle high */
 	dev_vdbg(ts->dev,
 		"%s: wait for irq toggle high\n", __func__);
+#if 0
 	retval = -ETIMEDOUT;
 	for (i = 0; i < CY_DELAY_MAX * 10 * 5; i++) {
-		if (ts->platform_data->irq_stat() == CY_IRQ_DEASSERT) {
+		if (_cyttsp4_irq_stat(ts) == CY_IRQ_DEASSERT) {
 			retval = 0;
 			break;
 		}
@@ -7321,6 +7358,9 @@ _cyttsp4_startup_start:
 			__func__);
 		goto _cyttsp4_startup_exit;
 	}
+#else
+	mdelay(1000);
+#endif
 
 	dev_vdbg(ts->dev,
 		"%s: read sysinfo 1\n", __func__);
@@ -7856,6 +7896,18 @@ void *cyttsp4_core_init(struct cyttsp4_bus_ops *bus_ops,
 		dev_err(dev,
 			"%s: Error, kzalloc context memory\n", __func__);
 		goto error_alloc_data;
+	}
+
+	ts->touch_reset = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_LOW);
+	if (IS_ERR(ts->touch_reset)) {
+		pr_err("%s: Error, no 'reset' gpio\n", __func__);
+		goto error_alloc_failed;
+	}
+
+	ts->touch_irq = devm_gpiod_get_optional(dev, "irq", GPIOD_IN);
+	if (IS_ERR(ts->touch_irq)) {
+		pr_err("%s: Error, no 'irq' gpio\n", __func__);
+		goto error_alloc_failed;
 	}
 
 #if defined(CY_USE_FORCE_LOAD) || defined(CONFIG_TOUCHSCREEN_DEBUG)

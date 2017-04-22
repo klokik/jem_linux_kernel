@@ -55,9 +55,9 @@ struct touch_platform_data {
 	uint8_t         addr[2];
 	uint16_t        flags;
 
-	int         (*hw_reset)(void);
-	int         (*hw_recov)(int);
-	int         (*irq_stat)(void);
+	//int         (*hw_reset)(void);
+	//int         (*hw_recov)(int);
+	//int         (*irq_stat)(void);
 	int         (*is_good_panel)(void);
 } __attribute__ ((packed));
 

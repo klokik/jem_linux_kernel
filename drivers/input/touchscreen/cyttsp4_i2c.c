@@ -182,6 +182,14 @@ static const struct i2c_device_id cyttsp4_i2c_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, cyttsp4_i2c_id);
 
+#ifdef CONFIG_OF
+static const struct of_device_id cyttsp4_i2c_of_match_table[] = {
+	{ .compatible = "cy,cyttsp4-i2c" },
+	{},
+};
+MODULE_DEVICE_TABLE(of, cyttsp4_i2c_of_match_table);
+#endif
+
 static struct i2c_driver cyttsp4_i2c_driver = {
 	.driver = {
 		.name = CY_I2C_NAME,
@@ -191,6 +199,7 @@ static struct i2c_driver cyttsp4_i2c_driver = {
 		.pm = &cyttsp4_pm_ops,
 #endif
 #endif
+		.of_match_table = of_match_ptr(cyttsp4_i2c_of_match_table),
 	},
 	.probe = cyttsp4_i2c_probe,
 	.remove = cyttsp4_i2c_remove,
