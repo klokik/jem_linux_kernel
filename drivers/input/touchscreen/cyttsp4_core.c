@@ -7343,7 +7343,7 @@ _cyttsp4_startup_start:
 	/* Wait for IRQ to toggle high */
 	dev_vdbg(ts->dev,
 		"%s: wait for irq toggle high\n", __func__);
-#if 0
+#if 1
 	retval = -ETIMEDOUT;
 	for (i = 0; i < CY_DELAY_MAX * 10 * 5; i++) {
 		if (_cyttsp4_irq_stat(ts) == CY_IRQ_DEASSERT) {
@@ -7898,13 +7898,13 @@ void *cyttsp4_core_init(struct cyttsp4_bus_ops *bus_ops,
 		goto error_alloc_data;
 	}
 
-	ts->touch_reset = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_LOW);
+	ts->touch_reset = devm_gpiod_get(dev, "reset", GPIOD_OUT_LOW);
 	if (IS_ERR(ts->touch_reset)) {
 		pr_err("%s: Error, no 'reset' gpio\n", __func__);
 		goto error_alloc_failed;
 	}
 
-	ts->touch_irq = devm_gpiod_get_optional(dev, "irq", GPIOD_IN);
+	ts->touch_irq = devm_gpiod_get(dev, "irq", GPIOD_IN);
 	if (IS_ERR(ts->touch_irq)) {
 		pr_err("%s: Error, no 'irq' gpio\n", __func__);
 		goto error_alloc_failed;
