@@ -10,6 +10,7 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
+#define DEBUG 1
 
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -2509,9 +2510,11 @@ static int wm8962_set_bias_level(struct snd_soc_codec *codec,
 {
 	switch (level) {
 	case SND_SOC_BIAS_ON:
+		dev_dbg(codec->dev, "Set bias level ON\n");
 		break;
 
 	case SND_SOC_BIAS_PREPARE:
+		dev_dbg(codec->dev, "Set bias level PREPARE\n");
 		/* VMID 2*50k */
 		snd_soc_update_bits(codec, WM8962_PWR_MGMT_1,
 				    WM8962_VMID_SEL_MASK, 0x80);
@@ -2520,6 +2523,7 @@ static int wm8962_set_bias_level(struct snd_soc_codec *codec,
 		break;
 
 	case SND_SOC_BIAS_STANDBY:
+		dev_dbg(codec->dev, "Set bias level STANDBY\n");
 		/* VMID 2*250k */
 		snd_soc_update_bits(codec, WM8962_PWR_MGMT_1,
 				    WM8962_VMID_SEL_MASK, 0x100);
@@ -2529,6 +2533,7 @@ static int wm8962_set_bias_level(struct snd_soc_codec *codec,
 		break;
 
 	case SND_SOC_BIAS_OFF:
+		dev_dbg(codec->dev, "Set bias level OFF\n");
 		break;
 	}
 
@@ -3013,6 +3018,8 @@ static irqreturn_t wm8962_irq(int irq, void *data)
 	unsigned int mask;
 	unsigned int active;
 	int reg, ret;
+
+	dev_dbg(dev, "Got IRQ\n");
 
 	ret = pm_runtime_get_sync(dev);
 	if (ret < 0) {
