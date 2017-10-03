@@ -19,6 +19,7 @@ snd-soc-osk5912-objs := osk5912.o
 snd-soc-am3517evm-objs := am3517evm.o
 snd-soc-omap-abe-twl6040-objs := omap-abe-twl6040.o
 snd-soc-omap-twl4030-objs := omap-twl4030.o
+snd-soc-omap-wm8962-objs := omap-wm8962-jem.o
 snd-soc-omap3pandora-objs := omap3pandora.o
 
 obj-$(CONFIG_SND_OMAP_SOC_N810) += snd-soc-n810.o
@@ -28,4 +29,5 @@ obj-$(CONFIG_SND_OMAP_SOC_OSK5912) += snd-soc-osk5912.o
 obj-$(CONFIG_SND_OMAP_SOC_AM3517EVM) += snd-soc-am3517evm.o
 obj-$(CONFIG_SND_OMAP_SOC_OMAP_ABE_TWL6040) += snd-soc-omap-abe-twl6040.o
 obj-$(CONFIG_SND_OMAP_SOC_OMAP_TWL4030) += snd-soc-omap-twl4030.o
+obj-$(CONFIG_SND_OMAP_SOC_OMAP_WM8962) += snd-soc-omap-wm8962.o
 obj-$(CONFIG_SND_OMAP_SOC_OMAP3_PANDORA) += snd-soc-omap3pandora.o
