@@ -94,18 +94,72 @@
 	};
 
 	sound {
-		compatible = "ti,omap-wm8962";
+		// compatible = "ti,omap-wm8962";
+		compatible = "ti,jem-audio";
 		model = "wm8962-audio";
 		ssi-controller = <&mcbsp2>;
-		audio-codec = <&codec>;
+		audio-codec = <&wm_codec>;
 		audio-routing =
-			"Headphone Jack", "HPOUTL",
-			"Headphone Jack", "HPOUTR",
+			// "Headphone Jack", "HPOUTL",
+			// "Headphone Jack", "HPOUTR",
 			"Ext Spk", "SPKOUTL",
-			"Ext Spk", "SPKOUTR",
-			"AMIC", "MICBIAS",
-			"IN3R", "AMIC";
+			"Ext Spk", "SPKOUTR";
+			// "AMIC", "MICBIAS",
+			// "IN3R", "AMIC";
+		// clocks = <&auxclk0_ck>;
 	};
+	// soundcard {
+	// 	compatible = "audio-graph-card";
+	// 	label = "Droid 4 Audio";
+
+	// 	simple-graph-card,widgets =
+	// 		"Speaker", "Earpiece",
+	// 		"Speaker", "Loudspeaker",
+	// 		"Headphone", "Headphone Jack",
+	// 		"Microphone", "Internal Mic";
+
+	// 	simple-graph-card,routing =
+	// 		"Earpiece", "EP",
+	// 		"Loudspeaker", "SPKR",
+	// 		"Headphone Jack", "HSL",
+	// 		"Headphone Jack", "HSR",
+	// 		"MICR", "Internal Mic";
+
+	// 	dais = <&mcbsp2_port>;
+	// };
+	// sound {
+	// 	compatible = "simple-audio-card";
+	// 	simple-audio-card,name = "Jem Audio";
+	// 	simple-audio-card,format = "i2s";
+	// 	// simple-audio-card,mclk-fs = <512>;
+	// 	simple-audio-card,bitclock-master = <&dailink0_codec>;
+	// 	simple-audio-card,frame-master = <&dailink0_codec>;
+
+	// 	simple-audio-card,widgets =
+	// 		"Speaker", "Loudspeaker";
+	// 		// "Headphone", "Headphone Jack";
+
+	// 	simple-audio-card,routing =
+	// 		"Loudspeaker", "SPKOUTL",
+	// 		"Loudspeaker", "SPKOUTR";
+	// 		// "Headphone Jack", "HPOUTL",
+	// 		// "Headphone Jack", "HPOUTR";
+
+	// 	clocks = <&auxclk0_ck>;
+
+	// 	simple-audio-card,hp-det-gpio = <&gpio6 11 GPIO_ACTIVE_HIGH>;
+
+	// 	dailink0_master: simple-audio-card,cpu {
+	// 		sound-dai = <&mcbsp2>;
+	// 		// system-clock-frequency = <24576000>;
+	// 		system-clock-frequency = <22579200>;
+	// 	};
+
+	// 	dailink0_codec: simple-audio-card,codec {
+	// 		sound-dai = <&wm_codec>;
+	// 		system-clock-frequency = <22579200>;
+	// 	};
+	// };
 
 	/* backlight PWM */
 	pwm10: dmtimer-pwm@10 {
@@ -206,6 +260,7 @@
 			&nt71391_pins
 			&bt_pins
 			/* &smb347_pins */
+			/* &wm8962_pins */
 	>;
 
 	gpio_keys_pins: pinmux_gpio_keys_pins {
@@ -304,6 +359,23 @@
 		>;
 	};
 
+	mmc2_pins_default: pinmux_mmc2_pins_default {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x82, PIN_INPUT_PULLUP | MUX_MODE1)	/* gpmc_noe.sdmmc2_clk */
+			OMAP4_IOPAD(0x84, PIN_INPUT_PULLUP | MUX_MODE1)	/* gpmc_nwe.sdmmc2_cmd */
+			OMAP4_IOPAD(0x40, PIN_INPUT_PULLUP | MUX_MODE1)	/* gpmc_ad0.sdmmc2_dat0 */
+			OMAP4_IOPAD(0x42, PIN_INPUT_PULLUP | MUX_MODE1)	/* gpmc_ad1.sdmmc2_dat1 */
+			OMAP4_IOPAD(0x44, PIN_INPUT_PULLUP | MUX_MODE1)	/* gpmc_ad2.sdmmc2_dat2 */
+			OMAP4_IOPAD(0x46, PIN_INPUT_PULLUP | MUX_MODE1)	/* gpmc_ad3.sdmmc2_dat3 */
+			OMAP4_IOPAD(0x48, PIN_INPUT_PULLUP | MUX_MODE1)	/* gpmc_ad4.sdmmc2_dat4 */
+			OMAP4_IOPAD(0x4a, PIN_INPUT_PULLUP | MUX_MODE1)	/* gpmc_ad5.sdmmc2_dat5 */
+			OMAP4_IOPAD(0x4c, PIN_INPUT_PULLUP | MUX_MODE1)	/* gpmc_ad6.sdmmc2_dat6 */
+			OMAP4_IOPAD(0x4e, PIN_INPUT_PULLUP | MUX_MODE1)	/* gpmc_ad7.sdmmc2_dat7 */
+			OMAP4_IOPAD(0x4c, PIN_INPUT_PULLUP | MUX_MODE1)	/* gpmc_ad6.sdmmc2_dat6 */
+			OMAP4_IOPAD(0x4e, PIN_INPUT_PULLUP | MUX_MODE1)	/* gpmc_ad7.sdmmc2_dat7 */
+		>;
+	};
+
 	mcspi1_pins: pinmux_mcspi1_pins {
 		pinctrl-single,pins = <
 			0xf2 (PIN_INPUT | MUX_MODE0)		/*  mcspi1_clk.mcspi1_clk */
@@ -324,8 +396,9 @@
 
 	tpd12s015_pins: pinmux_tpd12s015_pins {
 		pinctrl-single,pins = <
-			0x22 (PIN_OUTPUT | MUX_MODE3)		/* gpmc_a17.gpio_41 */	//???
-			0x48 (PIN_OUTPUT | MUX_MODE3)		/* gpmc_nbe1.gpio_60 */ //???
+			/* LS_OE, CT_CP_HPD */
+			0x22 (PIN_OUTPUT_PULLDOWN | MUX_MODE3)		/* gpmc_a17.gpio_41 */
+			0x48 (PIN_OUTPUT_PULLDOWN | MUX_MODE3)		/* gpmc_nbe1.gpio_60 */
 			0x58 (PIN_INPUT_PULLDOWN | MUX_MODE3)	/* hdmi_hpd.gpio_63 */
 		>;
 	};
@@ -378,7 +451,7 @@
 	/* brcm GPIO inputs and SDIO pins */
 	brcmfmac_pins: pinmux_brcmfmac_pins {
 		pinctrl-single,pins = <
-			OMAP4_IOPAD(0x068, PIN_INPUT | MUX_MODE3)		/* gpmc_a20.gpio_44 */
+			// OMAP4_IOPAD(0x068, PIN_INPUT | MUX_MODE3)		/* gpmc_a20.gpio_44 */
 			OMAP4_IOPAD(0x148, PIN_INPUT_PULLUP | MUX_MODE0)	/* sdmmc5_clk.sdmmc5_clk */
 			OMAP4_IOPAD(0x14a, PIN_INPUT_PULLUP | MUX_MODE0)	/* sdmmc5_cmd.sdmmc5_cmd */
 			OMAP4_IOPAD(0x14c, PIN_INPUT_PULLUP | MUX_MODE0)	/* sdmmc5_dat0.sdmmc5_dat0 */
@@ -397,8 +470,10 @@
 	};
 
 	wm8962_pins: pinmux_wm8962_pins {
+		/* IRQ, HP_DETECT */
 		pinctrl-single,pins = <
-			OMAP4_IOPAD(0x1cc, PIN_INPUT_PULLDOWN | MUX_MODE3)		/* dpm_emu15.gpio_26 */
+			OMAP4_IOPAD(0x1cc, PIN_INPUT_PULLDOWN | MUX_MODE3)	/* dpm_emu15.gpio_26 */
+			OMAP4_IOPAD(0x17c, PIN_INPUT_PULLUP | MUX_MODE3)	/* kpd_col4.gpio_171 */
 		>;
 	};
 };
@@ -458,7 +533,7 @@
 		compatible = "ti,twl6032-ldo4";
 		regulator-min-microvolt = <1200000>;
 		regulator-max-microvolt = <2800000>;
-		regulator-always-on;
+		// regulator-always-on;
 	};
 
 	vusim: regulator-vusim {
@@ -623,17 +698,27 @@
 		enable-chg-ctrl = <0>;
 	};
 
-	codec: wm8962@1a {
+	wm_codec: wm8962@1a {
+		#sound-dai-cells = <0>;
 		compatible = "wlf,wm8962";
 		reg = <0x1a>;
 
 		pinctrl-names = "default";
 		pinctrl-0 = <&wm8962_pins>;
 
-//		interrupts = <26 IRQ_TYPE_LEVEL_HIGH>;	/* gpio_26 */
-//		interrupt-parent = <&gpio1>;
+		interrupts = <26 IRQ_TYPE_LEVEL_HIGH>;	/* gpio_26 */
+		interrupt-parent = <&gpio1>;
 
 		clocks = <&auxclk0_ck>;
+
+		DCVDD-supply = <&vaux2>;
+		DBVDD-supply = <&vaux2>;
+		AVDD-supply = <&vaux2>;
+		CPVDD-supply = <&vaux2>;
+		MICVDD-supply = <&vaux2>;
+		PLLVDD-supply = <&vaux2>;
+		SPKVDD1-supply = <&vaux2>;
+		SPKVDD2-supply = <&vaux2>;
 
 		gpio-cfg = <
 			0x0000 /* 0:Default */
@@ -669,11 +754,18 @@
 };
 
 &mmc2 {
+	status = "okay";
+
+	pinctrl-names = "default";
+	pinctrl-0 = <&mmc2_pins_default>;
+
 	vmmc-supply = <&vmmc>;
 	bus-width = <8>;
 	non-removable;
-	disable-wp;
 	ti,non-removable;
+
+	cd-gpios = <&gpio2 1 GPIO_ACTIVE_LOW>;
+	wp-gpios = <&gpio2 2 GPIO_ACTIVE_HIGH>;
 };
 
 &mmc3 {
@@ -698,6 +790,8 @@
 	ti,non-removable;
 	/*cap-power-off-card;*/
 	/*max-frequency = <50000000>;*/
+
+	disable-wp;
 
 	#address-cells = <1>;
 	#size-cells = <0>;
@@ -725,21 +819,27 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&uart2_pins>;
 	interrupts-extended = <&wakeupgen GIC_SPI 73 IRQ_TYPE_LEVEL_HIGH
-			       &omap4_pmx_core OMAP4_UART2_RX>;
+				   &omap4_pmx_core OMAP4_UART2_RX>;
 };
 
 &uart3 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&uart3_pins>;
 	interrupts-extended = <&wakeupgen GIC_SPI 74 IRQ_TYPE_LEVEL_HIGH
-			       &omap4_pmx_core OMAP4_UART3_RX>;
+							&omap4_pmx_core OMAP4_UART3_RX>;
+	// not sure if right port
+/*	bluetooth {
+		compatible = "ti,wl1285-st";
+		enable-gpios = <&gpio6 14 GPIO_ACTIVE_HIGH>;
+		max-speed = <3686400>;
+	};*/
 };
 
 &uart4 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&uart4_pins>;
 	interrupts-extended = <&wakeupgen GIC_SPI 70 IRQ_TYPE_LEVEL_HIGH
-			       &omap4_pmx_core OMAP4_UART4_RX>;
+							&omap4_pmx_core OMAP4_UART4_RX>;
 };
 
 &mcbsp1 {
@@ -749,6 +849,7 @@
 };
 
 &mcbsp2 {
+	#sound-dai-cells = <0>;
 	pinctrl-names = "default";
 	pinctrl-0 = <&mcbsp2_pins>;
 	status = "okay";
