@@ -39,6 +39,16 @@ static int jem_hw_params(struct snd_pcm_substream *substream,
 
 	dev_dbg(codec_dai->dev, "%s() - enter\n", __func__);
 
+#if 0 // FTM
+	ret = snd_soc_dai_set_sysclk(codec_dai, WM8962_SYSCLK_MCLK,
+				PLL_MCLK_RATE, SND_SOC_CLOCK_IN);
+	if (ret < 0) {
+		dev_err(codec_dai->dev, "Failed to set CODEC SYSCLK: %d\n",
+			ret);
+		return ret;
+	}
+#endif
+
 	ret = snd_soc_dai_set_pll(codec_dai, WM8962_FLL, WM8962_FLL_MCLK,
 				PLL_MCLK_RATE, SYSCLK_RATE);
 	if (ret < 0) {
@@ -167,23 +177,8 @@ static int wm8962_set_bias_level_post(struct snd_soc_card *card,
 	switch (level) {
 	case SND_SOC_BIAS_STANDBY:
 		dev_dbg(codec_dai->dev, "setting bias STANDBY\n");
-		if (dapm->bias_level == SND_SOC_BIAS_PREPARE) {
-			dev_dbg(codec_dai->dev, "Stopping SYSCLK\n");
-			ret = snd_soc_dai_set_sysclk(codec_dai, WM8962_SYSCLK_MCLK,
-						SYSCLK_RATE, SND_SOC_CLOCK_IN);
-			if (ret < 0) {
-				pr_err("Failed to set SYSCLK: %d\n", ret);
-				return ret;
-			}
-
-			dev_dbg(codec_dai->dev, "Stopping FLL\n");
-			ret = snd_soc_dai_set_pll(codec_dai, WM8962_FLL, WM8962_FLL_MCLK,
-						0, 0);
-			if (ret < 0) {
-				pr_err("Failed to stop FLL: %d\n", ret);
-				return ret;
-			}
-		}
+		// if (dapm->bias_level == SND_SOC_BIAS_PREPARE) {
+		// }
 		break;
 
 	case SND_SOC_BIAS_PREPARE:
@@ -196,6 +191,22 @@ static int wm8962_set_bias_level_post(struct snd_soc_card *card,
 
 	case SND_SOC_BIAS_OFF:
 		dev_dbg(codec_dai->dev, "setting bias OFF\n");
+
+		dev_dbg(codec_dai->dev, "Stopping SYSCLK\n");
+		ret = snd_soc_dai_set_sysclk(codec_dai, WM8962_SYSCLK_MCLK,
+					SYSCLK_RATE, SND_SOC_CLOCK_IN);
+		if (ret < 0) {
+			pr_err("Failed to set SYSCLK: %d\n", ret);
+			return ret;
+		}
+
+		dev_dbg(codec_dai->dev, "Stopping FLL\n");
+		ret = snd_soc_dai_set_pll(codec_dai, WM8962_FLL, WM8962_FLL_MCLK,
+					0, 0);
+		if (ret < 0) {
+			pr_err("Failed to stop FLL: %d\n", ret);
+			return ret;
+		}
 		break;
 
 	default:
@@ -307,13 +318,13 @@ static int ti_wm8962_probe(struct platform_device *pdev)
 	}
 
 	priv->pll_mclk_rate = PLL_MCLK_RATE;//clk_get_rate(priv->mclk);
-	ret = clk_set_rate(priv->mclk, priv->pll_mclk_rate);
-	ret |= clk_prepare_enable(priv->mclk);
+	// ret = clk_set_rate(priv->mclk, priv->pll_mclk_rate);
+	ret = clk_prepare_enable(priv->mclk);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to set or enable codec clk: %d\n", ret);
 		goto fail;
 	}
-	dev_dbg(&pdev->dev, "MCLK enabled: %d\n", priv->pll_mclk_rate);
+	dev_dbg(&pdev->dev, "MCLK enabled: %lu\n", clk_get_rate(priv->mclk));
 
 
 	/* Init snd_soc_card */

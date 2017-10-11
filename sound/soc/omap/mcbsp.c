@@ -13,6 +13,7 @@
  *
  * Multichannel mode not supported.
  */
+#define DEBUG 1
 
 #include <linux/module.h>
 #include <linux/init.h>

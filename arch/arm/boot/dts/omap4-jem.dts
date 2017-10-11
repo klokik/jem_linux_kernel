@@ -352,10 +352,10 @@
 
 	mcbsp2_pins: pinmux_mcbsp2_pins {
 		pinctrl-single,pins = <
-			0xb6 (PIN_INPUT | MUX_MODE0)		/* abe_mcbsp2_clkx.abe_mcbsp2_clkx */
-			0xb8 (PIN_INPUT_PULLDOWN | MUX_MODE0)	/* abe_mcbsp2_dr.abe_mcbsp2_dr */
-			0xba (PIN_OUTPUT_PULLDOWN | MUX_MODE0)	/* abe_mcbsp2_dx.abe_mcbsp2_dx */
-			0xbc (PIN_INPUT | MUX_MODE0)		/* abe_mcbsp2_fsx.abe_mcbsp2_fsx */
+			OMAP4_IOPAD(0xf6, PIN_INPUT | MUX_MODE0)		/* abe_mcbsp2_clkx.abe_mcbsp2_clkx */
+			OMAP4_IOPAD(0xf8, PIN_INPUT_PULLDOWN | MUX_MODE0)	/* abe_mcbsp2_dr.abe_mcbsp2_dr */
+			OMAP4_IOPAD(0xfa, PIN_OUTPUT_PULLDOWN | MUX_MODE0)	/* abe_mcbsp2_dx.abe_mcbsp2_dx */
+			OMAP4_IOPAD(0xfc, PIN_INPUT | MUX_MODE0)		/* abe_mcbsp2_fsx.abe_mcbsp2_fsx */
 		>;
 	};
 
@@ -396,9 +396,9 @@
 
 	tpd12s015_pins: pinmux_tpd12s015_pins {
 		pinctrl-single,pins = <
-			/* LS_OE, CT_CP_HPD */
-			0x22 (PIN_OUTPUT_PULLDOWN | MUX_MODE3)		/* gpmc_a17.gpio_41 */
-			0x48 (PIN_OUTPUT_PULLDOWN | MUX_MODE3)		/* gpmc_nbe1.gpio_60 */
+			/* LS_OE, CT_CP_HPD - high to enable dcdc*/
+			0x22 (PIN_OUTPUT_PULLUP | MUX_MODE3)		/* gpmc_a17.gpio_41 */
+			0x48 (PIN_OUTPUT_PULLUP | MUX_MODE3)		/* gpmc_nbe1.gpio_60 */
 			0x58 (PIN_INPUT_PULLDOWN | MUX_MODE3)	/* hdmi_hpd.gpio_63 */
 		>;
 	};
@@ -451,7 +451,6 @@
 	/* brcm GPIO inputs and SDIO pins */
 	brcmfmac_pins: pinmux_brcmfmac_pins {
 		pinctrl-single,pins = <
-			// OMAP4_IOPAD(0x068, PIN_INPUT | MUX_MODE3)		/* gpmc_a20.gpio_44 */
 			OMAP4_IOPAD(0x148, PIN_INPUT_PULLUP | MUX_MODE0)	/* sdmmc5_clk.sdmmc5_clk */
 			OMAP4_IOPAD(0x14a, PIN_INPUT_PULLUP | MUX_MODE0)	/* sdmmc5_cmd.sdmmc5_cmd */
 			OMAP4_IOPAD(0x14c, PIN_INPUT_PULLUP | MUX_MODE0)	/* sdmmc5_dat0.sdmmc5_dat0 */
@@ -706,10 +705,12 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&wm8962_pins>;
 
-		interrupts = <26 IRQ_TYPE_LEVEL_HIGH>;	/* gpio_26 */
-		interrupt-parent = <&gpio1>;
+		// interrupts = <26 IRQ_TYPE_LEVEL_HIGH>;	/* gpio_26 */
+		// interrupt-parent = <&gpio1>;
 
 		clocks = <&auxclk0_ck>;
+		clock-names = "main_clk";
+		clock-frequency = <19200000>;
 
 		DCVDD-supply = <&vaux2>;
 		DBVDD-supply = <&vaux2>;
