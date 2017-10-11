@@ -8052,8 +8052,8 @@ void *cyttsp4_core_init(struct cyttsp4_bus_ops *bus_ops,
 	/* android EventHub will detect a hard keyboard based on keybit	*/
 	/* android system couldn't display virtual soft keyboard	*/
 	/* bitmap_fill(input_device->keybit, KEY_MAX);			*/
-	bitmap_fill(input_device->relbit, REL_MAX);
-	bitmap_fill(input_device->absbit, ABS_MAX);
+	// bitmap_fill(input_device->relbit, REL_MAX);
+	// bitmap_fill(input_device->absbit, ABS_MAX);
 
 	/* ICS touch down button press signal */
 	__set_bit(BTN_TOUCH, input_device->keybit);
@@ -8063,6 +8063,7 @@ void *cyttsp4_core_init(struct cyttsp4_bus_ops *bus_ops,
 		signal = ts->platform_data->frmwrk->abs[
 			(i * CY_NUM_ABS_SET) + CY_SIGNAL_OST];
 		if (signal != CY_IGNORE_VALUE) {
+			__set_bit(signal, input_device->absbit);
 			min = ts->platform_data->frmwrk->abs
 				[(i * CY_NUM_ABS_SET) + CY_MIN_OST];
 			max = ts->platform_data->frmwrk->abs
