@@ -475,7 +475,7 @@ static struct omap_dss_driver pdsivm_ops = {
 	.check_timings	= pdsivm_check_timings,
 
 //	.get_resolution	= pdsivm_get_resolution,
-	// .get_resolution	= omapdss_default_get_resolution,
+	.get_resolution	= omapdss_default_get_resolution,
 };
 
 /* static void pdsivm_hw_reset(struct omap_dss_device *dssdev)
@@ -659,8 +659,8 @@ static int pdsivm_power_on(struct panel_drv_data *ddata)
 		.lp_clk_min = 7000000,
 		.lp_clk_max = 10000000,
 		.ddr_clk_always_on = false,
-		// .trans_mode = OMAP_DSS_DSI_PULSE_MODE,
-		.trans_mode = OMAP_DSS_DSI_BURST_MODE,
+		.trans_mode = OMAP_DSS_DSI_PULSE_MODE,
+		//.trans_mode = OMAP_DSS_DSI_BURST_MODE,
 	};
 
 /*	if (ddata->pin_config.num_pins > 0) {
