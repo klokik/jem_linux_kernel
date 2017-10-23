@@ -366,7 +366,7 @@ static int ide_tape_callback(ide_drive_t *drive, int dsc)
 			err = pc->error;
 		}
 	}
-	rq->errors = err;
+	scsi_req(rq)->result = err;
 
 	return uptodate;
 }
@@ -474,7 +474,7 @@ static ide_startstop_t ide_tape_issue_pc(ide_drive_t *drive,
 
 		drive->failed_pc = NULL;
 		drive->pc_callback(drive, 0);
-		ide_complete_rq(drive, -EIO, blk_rq_bytes(rq));
+		ide_complete_rq(drive, BLK_STS_IOERR, blk_rq_bytes(rq));
 		return ide_stopped;
 	}
 	ide_debug_log(IDE_DBG_SENSE, "retry #%d, cmd: 0x%02x", pc->retries,
@@ -855,7 +855,6 @@ static int idetape_queue_rw_tail(ide_drive_t *drive, int cmd, int size)
 	BUG_ON(size < 0 || size % tape->blk_size);
 
 	rq = blk_get_request(drive->queue, REQ_OP_DRV_IN, __GFP_RECLAIM);
-	scsi_req_init(rq);
 	ide_req(rq)->type = ATA_PRIV_MISC;
 	scsi_req(rq)->cmd[13] = cmd;
 	rq->rq_disk = tape->disk;
@@ -879,7 +878,7 @@ static int idetape_queue_rw_tail(ide_drive_t *drive, int cmd, int size)
 		tape->valid = 0;
 
 	ret = size;
-	if (rq->errors == IDE_DRV_ERROR_GENERAL)
+	if (scsi_req(rq)->result == IDE_DRV_ERROR_GENERAL)
 		ret = -EIO;
 out_put:
 	blk_put_request(rq);
@@ -1136,7 +1135,7 @@ static ssize_t idetape_chrdev_read(struct file *file, char __user *buf,
 	ssize_t ret = 0;
 	int rc;
 
-	ide_debug_log(IDE_DBG_FUNC, "count %Zd", count);
+	ide_debug_log(IDE_DBG_FUNC, "count %zd", count);
 
 	if (tape->chrdev_dir != IDETAPE_DIR_READ) {
 		if (test_bit(ilog2(IDE_AFLAG_DETECT_BS), &drive->atapi_flags))
@@ -1195,7 +1194,7 @@ static ssize_t idetape_chrdev_write(struct file *file, const char __user *buf,
 	if (tape->write_prot)
 		return -EACCES;
 
-	ide_debug_log(IDE_DBG_FUNC, "count %Zd", count);
+	ide_debug_log(IDE_DBG_FUNC, "count %zd", count);
 
 	/* Initialize write operation */
 	rc = idetape_init_rw(drive, IDETAPE_DIR_WRITE);

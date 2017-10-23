@@ -474,6 +474,7 @@ EXPORT_SYMBOL_GPL(usb_sg_init);
  * significantly improve USB throughput.
  *
  * There are three kinds of completion for this function.
+ *
  * (1) success, where io->status is zero.  The number of io->bytes
  *     transferred is as requested.
  * (2) error, where io->status is a negative errno value.  The number
@@ -2067,6 +2068,10 @@ int cdc_parse_cdc_header(struct usb_cdc_parsed_header *hdr,
 			dev_err(&intf->dev, "skipping garbage byte\n");
 			elength = 1;
 			goto next_desc;
+		}
+		if ((buflen < elength) || (elength < 3)) {
+			dev_err(&intf->dev, "invalid descriptor buffer length\n");
+			break;
 		}
 		if (buffer[1] != USB_DT_CS_INTERFACE) {
 			dev_err(&intf->dev, "skipping garbage\n");

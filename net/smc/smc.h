@@ -149,7 +149,7 @@ struct smc_connection {
 	atomic_t		sndbuf_space;	/* remaining space in sndbuf */
 	u16			tx_cdc_seq;	/* sequence # for CDC send */
 	spinlock_t		send_lock;	/* protect wr_sends */
-	struct work_struct	tx_work;	/* retry of smc_cdc_msg_send */
+	struct delayed_work	tx_work;	/* retry of smc_cdc_msg_send */
 
 	struct smc_host_cdc_msg	local_rx_ctrl;	/* filled during event_handl.
 						 * .prod cf. TCP rcv_nxt
@@ -164,6 +164,7 @@ struct smc_connection {
 #ifndef KERNEL_HAS_ATOMIC64
 	spinlock_t		acurs_lock;	/* protect cursors */
 #endif
+	struct work_struct	close_work;	/* peer sent some closing */
 };
 
 struct smc_sock {				/* smc sock container */

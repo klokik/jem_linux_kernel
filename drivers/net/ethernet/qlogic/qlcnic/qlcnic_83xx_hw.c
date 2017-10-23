@@ -178,7 +178,7 @@ const u32 qlcnic_83xx_reg_tbl[] = {
 	0x3540,		/* Device state, DRV_REG1 */
 	0x3544,		/* Driver state, DRV_REG2 */
 	0x3548,		/* Driver scratch, DRV_REG3 */
-	0x354C,		/* Device partiton info, DRV_REG4 */
+	0x354C,		/* Device partition info, DRV_REG4 */
 	0x3524,		/* Driver IDC ver, DRV_REG5 */
 	0x3550,		/* FW_VER_MAJOR */
 	0x3554,		/* FW_VER_MINOR */
@@ -242,6 +242,8 @@ static struct qlcnic_hardware_ops qlcnic_83xx_hw_ops = {
 	.get_cap_size			= qlcnic_83xx_get_cap_size,
 	.set_sys_info			= qlcnic_83xx_set_sys_info,
 	.store_cap_mask			= qlcnic_83xx_store_cap_mask,
+	.encap_rx_offload		= qlcnic_83xx_encap_rx_offload,
+	.encap_tx_offload		= qlcnic_83xx_encap_tx_offload,
 };
 
 static struct qlcnic_nic_template qlcnic_83xx_ops = {
@@ -3166,6 +3168,40 @@ int qlcnic_83xx_flash_read32(struct qlcnic_adapter *adapter, u32 flash_addr,
 	qlcnic_83xx_unlock_flash(adapter);
 
 	return 0;
+}
+
+void qlcnic_83xx_get_port_type(struct qlcnic_adapter *adapter)
+{
+	struct qlcnic_hardware_context *ahw = adapter->ahw;
+	struct qlcnic_cmd_args cmd;
+	u32 config;
+	int err;
+
+	err = qlcnic_alloc_mbx_args(&cmd, adapter, QLCNIC_CMD_GET_LINK_STATUS);
+	if (err)
+		return;
+
+	err = qlcnic_issue_cmd(adapter, &cmd);
+	if (err) {
+		dev_info(&adapter->pdev->dev,
+			 "Get Link Status Command failed: 0x%x\n", err);
+		goto out;
+	} else {
+		config = cmd.rsp.arg[3];
+
+		switch (QLC_83XX_SFP_MODULE_TYPE(config)) {
+		case QLC_83XX_MODULE_FIBRE_1000BASE_SX:
+		case QLC_83XX_MODULE_FIBRE_1000BASE_LX:
+		case QLC_83XX_MODULE_FIBRE_1000BASE_CX:
+		case QLC_83XX_MODULE_TP_1000BASE_T:
+			ahw->port_type = QLCNIC_GBE;
+			break;
+		default:
+			ahw->port_type = QLCNIC_XGBE;
+		}
+	}
+out:
+	qlcnic_free_mbx_args(&cmd);
 }
 
 int qlcnic_83xx_test_link(struct qlcnic_adapter *adapter)

@@ -19,6 +19,8 @@
 #include "util/data.h"
 #include "util/config.h"
 
+#include <errno.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <math.h>
 
@@ -364,6 +366,7 @@ static struct perf_tool tool = {
 	.exit	= perf_event__process_exit,
 	.fork	= perf_event__process_fork,
 	.lost	= perf_event__process_lost,
+	.namespaces = perf_event__process_namespaces,
 	.ordered_events = true,
 	.ordering_requires_timestamps = true,
 };
@@ -691,7 +694,7 @@ static void hists__process(struct hists *hists)
 	hists__precompute(hists);
 	hists__output_resort(hists, NULL);
 
-	hists__fprintf(hists, true, 0, 0, 0, stdout,
+	hists__fprintf(hists, !quiet, 0, 0, 0, stdout,
 		       symbol_conf.use_callchain);
 }
 
@@ -739,12 +742,14 @@ static void data_process(void)
 				hists__link(hists_base, hists);
 		}
 
-		fprintf(stdout, "%s# Event '%s'\n#\n", first ? "" : "\n",
-			perf_evsel__name(evsel_base));
+		if (!quiet) {
+			fprintf(stdout, "%s# Event '%s'\n#\n", first ? "" : "\n",
+				perf_evsel__name(evsel_base));
+		}
 
 		first = false;
 
-		if (verbose || data__files_cnt > 2)
+		if (verbose > 0 || ((data__files_cnt > 2) && !quiet))
 			data__fprintf();
 
 		/* Don't sort callchain for perf diff */
@@ -807,6 +812,7 @@ static const char * const diff_usage[] = {
 static const struct option options[] = {
 	OPT_INCR('v', "verbose", &verbose,
 		    "be more verbose (show symbol address, etc)"),
+	OPT_BOOLEAN('q', "quiet", &quiet, "Do not show any message"),
 	OPT_BOOLEAN('b', "baseline-only", &show_baseline_only,
 		    "Show only items with match in baseline"),
 	OPT_CALLBACK('c', "compute", &compute,
@@ -1296,7 +1302,10 @@ static int diff__config(const char *var, const char *value,
 			void *cb __maybe_unused)
 {
 	if (!strcmp(var, "diff.order")) {
-		sort_compute = perf_config_int(var, value);
+		int ret;
+		if (perf_config_int(&ret, var, value) < 0)
+			return -1;
+		sort_compute = ret;
 		return 0;
 	}
 	if (!strcmp(var, "diff.compute")) {
@@ -1317,7 +1326,7 @@ static int diff__config(const char *var, const char *value,
 	return 0;
 }
 
-int cmd_diff(int argc, const char **argv, const char *prefix __maybe_unused)
+int cmd_diff(int argc, const char **argv)
 {
 	int ret = hists__init();
 
@@ -1327,6 +1336,9 @@ int cmd_diff(int argc, const char **argv, const char *prefix __maybe_unused)
 	perf_config(diff__config, NULL);
 
 	argc = parse_options(argc, argv, options, diff_usage, 0);
+
+	if (quiet)
+		perf_quiet_option();
 
 	if (symbol__init(NULL) < 0)
 		return -1;

@@ -94,7 +94,7 @@ static inline int zcrypt_process_rescan(void)
 		atomic_set(&zcrypt_rescan_req, 0);
 		atomic_inc(&zcrypt_rescan_count);
 		ap_bus_force_rescan();
-		ZCRYPT_DBF(DBF_INFO, "rescan count=%07d",
+		ZCRYPT_DBF(DBF_INFO, "rescan count=%07d\n",
 			   atomic_inc_return(&zcrypt_rescan_count));
 		return 1;
 	}
@@ -374,7 +374,7 @@ out:
 	return rc;
 }
 
-static long zcrypt_send_cprb(struct ica_xcRB *xcRB)
+long zcrypt_send_cprb(struct ica_xcRB *xcRB)
 {
 	struct zcrypt_card *zc, *pref_zc;
 	struct zcrypt_queue *zq, *pref_zq;
@@ -444,6 +444,7 @@ out:
 			      AP_QID_CARD(qid), AP_QID_QUEUE(qid));
 	return rc;
 }
+EXPORT_SYMBOL(zcrypt_send_cprb);
 
 static bool is_desired_ep11_card(unsigned int dev_id,
 				 unsigned short target_num,
@@ -619,7 +620,7 @@ out:
 	return rc;
 }
 
-static void zcrypt_device_status_mask(struct zcrypt_device_matrix *matrix)
+void zcrypt_device_status_mask(struct zcrypt_device_matrix *matrix)
 {
 	struct zcrypt_card *zc;
 	struct zcrypt_queue *zq;
@@ -820,8 +821,10 @@ static long zcrypt_unlocked_ioctl(struct file *filp, unsigned int cmd,
 			do {
 				rc = zcrypt_rsa_modexpo(&mex);
 			} while (rc == -EAGAIN);
-		if (rc)
+		if (rc) {
+			ZCRYPT_DBF(DBF_DEBUG, "ioctl ICARSAMODEXPO rc=%d\n", rc);
 			return rc;
+		}
 		return put_user(mex.outputdatalength, &umex->outputdatalength);
 	}
 	case ICARSACRT: {
@@ -837,8 +840,10 @@ static long zcrypt_unlocked_ioctl(struct file *filp, unsigned int cmd,
 			do {
 				rc = zcrypt_rsa_crt(&crt);
 			} while (rc == -EAGAIN);
-		if (rc)
+		if (rc) {
+			ZCRYPT_DBF(DBF_DEBUG, "ioctl ICARSACRT rc=%d\n", rc);
 			return rc;
+		}
 		return put_user(crt.outputdatalength, &ucrt->outputdatalength);
 	}
 	case ZSECSENDCPRB: {
@@ -854,6 +859,8 @@ static long zcrypt_unlocked_ioctl(struct file *filp, unsigned int cmd,
 			do {
 				rc = zcrypt_send_cprb(&xcRB);
 			} while (rc == -EAGAIN);
+		if (rc)
+			ZCRYPT_DBF(DBF_DEBUG, "ioctl ZSENDCPRB rc=%d\n", rc);
 		if (copy_to_user(uxcRB, &xcRB, sizeof(xcRB)))
 			return -EFAULT;
 		return rc;
@@ -871,6 +878,8 @@ static long zcrypt_unlocked_ioctl(struct file *filp, unsigned int cmd,
 			do {
 				rc = zcrypt_send_ep11_cprb(&xcrb);
 			} while (rc == -EAGAIN);
+		if (rc)
+			ZCRYPT_DBF(DBF_DEBUG, "ioctl ZSENDEP11CPRB rc=%d\n", rc);
 		if (copy_to_user(uxcrb, &xcrb, sizeof(xcrb)))
 			return -EFAULT;
 		return rc;

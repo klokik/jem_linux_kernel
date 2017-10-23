@@ -58,13 +58,14 @@ struct __packed aq_ring_buff_s {
 			u8 len_l2;
 			u8 len_l3;
 			u8 len_l4;
-			u8 rsvd2;
+			u8 is_ipv6:1;
+			u8 rsvd2:7;
 			u32 len_pkt;
 		};
 	};
 	union {
 		struct {
-			u32 len:16;
+			u16 len;
 			u32 is_ip_cso:1;
 			u32 is_udp_cso:1;
 			u32 is_tcp_cso:1;
@@ -76,8 +77,10 @@ struct __packed aq_ring_buff_s {
 			u32 is_cleaned:1;
 			u32 is_error:1;
 			u32 rsvd3:6;
+			u16 eop_index;
+			u16 rsvd4;
 		};
-		u32 flags;
+		u64 flags;
 	};
 };
 
@@ -93,6 +96,7 @@ struct aq_ring_stats_tx_s {
 	u64 errors;
 	u64 packets;
 	u64 bytes;
+	u64 queue_restarts;
 };
 
 union aq_ring_stats_s {
@@ -146,8 +150,14 @@ struct aq_ring_s *aq_ring_rx_alloc(struct aq_ring_s *self,
 int aq_ring_init(struct aq_ring_s *self);
 void aq_ring_rx_deinit(struct aq_ring_s *self);
 void aq_ring_free(struct aq_ring_s *self);
+void aq_ring_update_queue_state(struct aq_ring_s *ring);
+void aq_ring_queue_wake(struct aq_ring_s *ring);
+void aq_ring_queue_stop(struct aq_ring_s *ring);
 void aq_ring_tx_clean(struct aq_ring_s *self);
-int aq_ring_rx_clean(struct aq_ring_s *self, int *work_done, int budget);
+int aq_ring_rx_clean(struct aq_ring_s *self,
+		     struct napi_struct *napi,
+		     int *work_done,
+		     int budget);
 int aq_ring_rx_fill(struct aq_ring_s *self);
 
 #endif /* AQ_RING_H */

@@ -33,6 +33,7 @@
 #include <linux/seq_file.h>
 #include <linux/time.h>
 #include <linux/quotaops.h>
+#include <linux/sched/signal.h>
 
 #define MLOG_MASK_PREFIX ML_DLM_GLUE
 #include <cluster/masklog.h>
@@ -2590,6 +2591,10 @@ void ocfs2_inode_unlock_tracker(struct inode *inode,
 	struct ocfs2_lock_res *lockres;
 
 	lockres = &OCFS2_I(inode)->ip_inode_lockres;
+	/* had_lock means that the currect process already takes the cluster
+	 * lock previously. If had_lock is 1, we have nothing to do here, and
+	 * it will get unlocked where we got the lock.
+	 */
 	if (!had_lock) {
 		ocfs2_remove_holder(lockres, oh);
 		ocfs2_inode_unlock(inode, ex);

@@ -265,18 +265,16 @@ static unsigned int rdac_failover_get(struct rdac_controller *ctlr,
 				      struct list_head *list,
 				      unsigned char *cdb)
 {
-	struct scsi_device *sdev = ctlr->ms_sdev;
-	struct rdac_dh_data *h = sdev->handler_data;
 	struct rdac_mode_common *common;
 	unsigned data_size;
 	struct rdac_queue_data *qdata;
 	u8 *lun_table;
 
-	if (h->ctlr->use_ms10) {
+	if (ctlr->use_ms10) {
 		struct rdac_pg_expanded *rdac_pg;
 
 		data_size = sizeof(struct rdac_pg_expanded);
-		rdac_pg = &h->ctlr->mode_select.expanded;
+		rdac_pg = &ctlr->mode_select.expanded;
 		memset(rdac_pg, 0, data_size);
 		common = &rdac_pg->common;
 		rdac_pg->page_code = RDAC_PAGE_CODE_REDUNDANT_CONTROLLER + 0x40;
@@ -288,7 +286,7 @@ static unsigned int rdac_failover_get(struct rdac_controller *ctlr,
 		struct rdac_pg_legacy *rdac_pg;
 
 		data_size = sizeof(struct rdac_pg_legacy);
-		rdac_pg = &h->ctlr->mode_select.legacy;
+		rdac_pg = &ctlr->mode_select.legacy;
 		memset(rdac_pg, 0, data_size);
 		common = &rdac_pg->common;
 		rdac_pg->page_code = RDAC_PAGE_CODE_REDUNDANT_CONTROLLER;
@@ -304,7 +302,7 @@ static unsigned int rdac_failover_get(struct rdac_controller *ctlr,
 	}
 
 	/* Prepare the command. */
-	if (h->ctlr->use_ms10) {
+	if (ctlr->use_ms10) {
 		cdb[0] = MODE_SELECT_10;
 		cdb[7] = data_size >> 8;
 		cdb[8] = data_size & 0xff;
@@ -555,10 +553,9 @@ static void send_mode_select(struct work_struct *work)
 		(char *) h->ctlr->array_name, h->ctlr->index,
 		(retry_cnt == RDAC_RETRY_COUNT) ? "queueing" : "retrying");
 
-	if (scsi_execute_req_flags(sdev, cdb, DMA_TO_DEVICE,
-				   &h->ctlr->mode_select, data_size, &sshdr,
-				   RDAC_TIMEOUT * HZ,
-				   RDAC_RETRIES, NULL, req_flags, 0)) {
+	if (scsi_execute(sdev, cdb, DMA_TO_DEVICE, &h->ctlr->mode_select,
+			data_size, NULL, &sshdr, RDAC_TIMEOUT * HZ,
+			RDAC_RETRIES, req_flags, 0, NULL)) {
 		err = mode_select_handle_sense(sdev, &sshdr);
 		if (err == SCSI_DH_RETRY && retry_cnt--)
 			goto retry;

@@ -21,6 +21,7 @@
 #include <linux/vfs.h>
 #include <linux/falloc.h>
 #include <linux/scatterlist.h>
+#include <linux/uuid.h>
 #include <crypto/aead.h>
 #include "cifsglob.h"
 #include "smb2pdu.h"
@@ -282,6 +283,7 @@ SMB3_request_interfaces(const unsigned int xid, struct cifs_tcon *tcon)
 
 	rc = SMB2_ioctl(xid, tcon, NO_FILE_ID, NO_FILE_ID,
 			FSCTL_QUERY_NETWORK_INTERFACE_INFO, true /* is_fsctl */,
+			false /* use_ipc */,
 			NULL /* no data input */, 0 /* no data input */,
 			(char **)&out_buf, &ret_data_len);
 	if (rc != 0)
@@ -423,6 +425,196 @@ smb2_query_file_info(const unsigned int xid, struct cifs_tcon *tcon,
 	kfree(smb2_data);
 	return rc;
 }
+
+#ifdef CONFIG_CIFS_XATTR
+static ssize_t
+move_smb2_ea_to_cifs(char *dst, size_t dst_size,
+		     struct smb2_file_full_ea_info *src, size_t src_size,
+		     const unsigned char *ea_name)
+{
+	int rc = 0;
+	unsigned int ea_name_len = ea_name ? strlen(ea_name) : 0;
+	char *name, *value;
+	size_t name_len, value_len, user_name_len;
+
+	while (src_size > 0) {
+		name = &src->ea_data[0];
+		name_len = (size_t)src->ea_name_length;
+		value = &src->ea_data[src->ea_name_length + 1];
+		value_len = (size_t)le16_to_cpu(src->ea_value_length);
+
+		if (name_len == 0) {
+			break;
+		}
+
+		if (src_size < 8 + name_len + 1 + value_len) {
+			cifs_dbg(FYI, "EA entry goes beyond length of list\n");
+			rc = -EIO;
+			goto out;
+		}
+
+		if (ea_name) {
+			if (ea_name_len == name_len &&
+			    memcmp(ea_name, name, name_len) == 0) {
+				rc = value_len;
+				if (dst_size == 0)
+					goto out;
+				if (dst_size < value_len) {
+					rc = -ERANGE;
+					goto out;
+				}
+				memcpy(dst, value, value_len);
+				goto out;
+			}
+		} else {
+			/* 'user.' plus a terminating null */
+			user_name_len = 5 + 1 + name_len;
+
+			rc += user_name_len;
+
+			if (dst_size >= user_name_len) {
+				dst_size -= user_name_len;
+				memcpy(dst, "user.", 5);
+				dst += 5;
+				memcpy(dst, src->ea_data, name_len);
+				dst += name_len;
+				*dst = 0;
+				++dst;
+			} else if (dst_size == 0) {
+				/* skip copy - calc size only */
+			} else {
+				/* stop before overrun buffer */
+				rc = -ERANGE;
+				break;
+			}
+		}
+
+		if (!src->next_entry_offset)
+			break;
+
+		if (src_size < le32_to_cpu(src->next_entry_offset)) {
+			/* stop before overrun buffer */
+			rc = -ERANGE;
+			break;
+		}
+		src_size -= le32_to_cpu(src->next_entry_offset);
+		src = (void *)((char *)src +
+			       le32_to_cpu(src->next_entry_offset));
+	}
+
+	/* didn't find the named attribute */
+	if (ea_name)
+		rc = -ENODATA;
+
+out:
+	return (ssize_t)rc;
+}
+
+static ssize_t
+smb2_query_eas(const unsigned int xid, struct cifs_tcon *tcon,
+	       const unsigned char *path, const unsigned char *ea_name,
+	       char *ea_data, size_t buf_size,
+	       struct cifs_sb_info *cifs_sb)
+{
+	int rc;
+	__le16 *utf16_path;
+	__u8 oplock = SMB2_OPLOCK_LEVEL_NONE;
+	struct cifs_open_parms oparms;
+	struct cifs_fid fid;
+	struct smb2_file_full_ea_info *smb2_data;
+
+	utf16_path = cifs_convert_path_to_utf16(path, cifs_sb);
+	if (!utf16_path)
+		return -ENOMEM;
+
+	oparms.tcon = tcon;
+	oparms.desired_access = FILE_READ_EA;
+	oparms.disposition = FILE_OPEN;
+	oparms.create_options = 0;
+	oparms.fid = &fid;
+	oparms.reconnect = false;
+
+	rc = SMB2_open(xid, &oparms, utf16_path, &oplock, NULL, NULL);
+	kfree(utf16_path);
+	if (rc) {
+		cifs_dbg(FYI, "open failed rc=%d\n", rc);
+		return rc;
+	}
+
+	smb2_data = kzalloc(SMB2_MAX_EA_BUF, GFP_KERNEL);
+	if (smb2_data == NULL) {
+		SMB2_close(xid, tcon, fid.persistent_fid, fid.volatile_fid);
+		return -ENOMEM;
+	}
+
+	rc = SMB2_query_eas(xid, tcon, fid.persistent_fid, fid.volatile_fid,
+			    smb2_data);
+	SMB2_close(xid, tcon, fid.persistent_fid, fid.volatile_fid);
+
+	if (!rc)
+		rc = move_smb2_ea_to_cifs(ea_data, buf_size, smb2_data,
+					  SMB2_MAX_EA_BUF, ea_name);
+
+	kfree(smb2_data);
+	return rc;
+}
+
+
+static int
+smb2_set_ea(const unsigned int xid, struct cifs_tcon *tcon,
+	    const char *path, const char *ea_name, const void *ea_value,
+	    const __u16 ea_value_len, const struct nls_table *nls_codepage,
+	    struct cifs_sb_info *cifs_sb)
+{
+	int rc;
+	__le16 *utf16_path;
+	__u8 oplock = SMB2_OPLOCK_LEVEL_NONE;
+	struct cifs_open_parms oparms;
+	struct cifs_fid fid;
+	struct smb2_file_full_ea_info *ea;
+	int ea_name_len = strlen(ea_name);
+	int len;
+
+	if (ea_name_len > 255)
+		return -EINVAL;
+
+	utf16_path = cifs_convert_path_to_utf16(path, cifs_sb);
+	if (!utf16_path)
+		return -ENOMEM;
+
+	oparms.tcon = tcon;
+	oparms.desired_access = FILE_WRITE_EA;
+	oparms.disposition = FILE_OPEN;
+	oparms.create_options = 0;
+	oparms.fid = &fid;
+	oparms.reconnect = false;
+
+	rc = SMB2_open(xid, &oparms, utf16_path, &oplock, NULL, NULL);
+	kfree(utf16_path);
+	if (rc) {
+		cifs_dbg(FYI, "open failed rc=%d\n", rc);
+		return rc;
+	}
+
+	len = sizeof(ea) + ea_name_len + ea_value_len + 1;
+	ea = kzalloc(len, GFP_KERNEL);
+	if (ea == NULL) {
+		SMB2_close(xid, tcon, fid.persistent_fid, fid.volatile_fid);
+		return -ENOMEM;
+	}
+
+	ea->ea_name_length = ea_name_len;
+	ea->ea_value_length = cpu_to_le16(ea_value_len);
+	memcpy(ea->ea_data, ea_name, ea_name_len + 1);
+	memcpy(ea->ea_data + ea_name_len + 1, ea_value, ea_value_len);
+
+	rc = SMB2_set_ea(xid, tcon, fid.persistent_fid, fid.volatile_fid, ea,
+			 len);
+	SMB2_close(xid, tcon, fid.persistent_fid, fid.volatile_fid);
+
+	return rc;
+}
+#endif
 
 static bool
 smb2_can_echo(struct TCP_Server_Info *server)
@@ -571,6 +763,7 @@ SMB2_request_res_key(const unsigned int xid, struct cifs_tcon *tcon,
 
 	rc = SMB2_ioctl(xid, tcon, persistent_fid, volatile_fid,
 			FSCTL_SRV_REQUEST_RESUME_KEY, true /* is_fsctl */,
+			false /* use_ipc */,
 			NULL, 0 /* no input */,
 			(char **)&res_key, &ret_data_len);
 
@@ -590,8 +783,8 @@ req_res_key_exit:
 	return rc;
 }
 
-static int
-smb2_clone_range(const unsigned int xid,
+static ssize_t
+smb2_copychunk_range(const unsigned int xid,
 			struct cifsFileInfo *srcfile,
 			struct cifsFileInfo *trgtfile, u64 src_off,
 			u64 len, u64 dest_off)
@@ -603,13 +796,14 @@ smb2_clone_range(const unsigned int xid,
 	struct cifs_tcon *tcon;
 	int chunks_copied = 0;
 	bool chunk_sizes_updated = false;
+	ssize_t bytes_written, total_bytes_written = 0;
 
 	pcchunk = kmalloc(sizeof(struct copychunk_ioctl), GFP_KERNEL);
 
 	if (pcchunk == NULL)
 		return -ENOMEM;
 
-	cifs_dbg(FYI, "in smb2_clone_range - about to call request res key\n");
+	cifs_dbg(FYI, "in smb2_copychunk_range - about to call request res key\n");
 	/* Request a key from the server to identify the source of the copy */
 	rc = SMB2_request_res_key(xid, tlink_tcon(srcfile->tlink),
 				srcfile->fid.persistent_fid,
@@ -635,7 +829,8 @@ smb2_clone_range(const unsigned int xid,
 		/* Request server copy to target from src identified by key */
 		rc = SMB2_ioctl(xid, tcon, trgtfile->fid.persistent_fid,
 			trgtfile->fid.volatile_fid, FSCTL_SRV_COPYCHUNK_WRITE,
-			true /* is_fsctl */, (char *)pcchunk,
+			true /* is_fsctl */, false /* use_ipc */,
+			(char *)pcchunk,
 			sizeof(struct copychunk_ioctl),	(char **)&retbuf,
 			&ret_data_len);
 		if (rc == 0) {
@@ -666,14 +861,16 @@ smb2_clone_range(const unsigned int xid,
 			}
 			chunks_copied++;
 
-			src_off += le32_to_cpu(retbuf->TotalBytesWritten);
-			dest_off += le32_to_cpu(retbuf->TotalBytesWritten);
-			len -= le32_to_cpu(retbuf->TotalBytesWritten);
+			bytes_written = le32_to_cpu(retbuf->TotalBytesWritten);
+			src_off += bytes_written;
+			dest_off += bytes_written;
+			len -= bytes_written;
+			total_bytes_written += bytes_written;
 
-			cifs_dbg(FYI, "Chunks %d PartialChunk %d Total %d\n",
+			cifs_dbg(FYI, "Chunks %d PartialChunk %d Total %zu\n",
 				le32_to_cpu(retbuf->ChunksWritten),
 				le32_to_cpu(retbuf->ChunkBytesWritten),
-				le32_to_cpu(retbuf->TotalBytesWritten));
+				bytes_written);
 		} else if (rc == -EINVAL) {
 			if (ret_data_len != sizeof(struct copychunk_ioctl_rsp))
 				goto cchunk_out;
@@ -710,7 +907,10 @@ smb2_clone_range(const unsigned int xid,
 cchunk_out:
 	kfree(pcchunk);
 	kfree(retbuf);
-	return rc;
+	if (rc)
+		return rc;
+	else
+		return total_bytes_written;
 }
 
 static int
@@ -787,7 +987,8 @@ static bool smb2_set_sparse(const unsigned int xid, struct cifs_tcon *tcon,
 
 	rc = SMB2_ioctl(xid, tcon, cfile->fid.persistent_fid,
 			cfile->fid.volatile_fid, FSCTL_SET_SPARSE,
-			true /* is_fctl */, &setsparse, 1, NULL, NULL);
+			true /* is_fctl */, false /* use_ipc */,
+			&setsparse, 1, NULL, NULL);
 	if (rc) {
 		tcon->broken_sparse_sup = true;
 		cifs_dbg(FYI, "set sparse rc = %d\n", rc);
@@ -857,7 +1058,8 @@ smb2_duplicate_extents(const unsigned int xid,
 	rc = SMB2_ioctl(xid, tcon, trgtfile->fid.persistent_fid,
 			trgtfile->fid.volatile_fid,
 			FSCTL_DUPLICATE_EXTENTS_TO_FILE,
-			true /* is_fsctl */, (char *)&dup_ext_buf,
+			true /* is_fsctl */, false /* use_ipc */,
+			(char *)&dup_ext_buf,
 			sizeof(struct duplicate_extents_to_file),
 			NULL,
 			&ret_data_len);
@@ -891,7 +1093,8 @@ smb3_set_integrity(const unsigned int xid, struct cifs_tcon *tcon,
 	return SMB2_ioctl(xid, tcon, cfile->fid.persistent_fid,
 			cfile->fid.volatile_fid,
 			FSCTL_SET_INTEGRITY_INFORMATION,
-			true /* is_fsctl */, (char *)&integr_info,
+			true /* is_fsctl */, false /* use_ipc */,
+			(char *)&integr_info,
 			sizeof(struct fsctl_set_integrity_information_req),
 			NULL,
 			&ret_data_len);
@@ -910,7 +1113,8 @@ smb3_enum_snapshots(const unsigned int xid, struct cifs_tcon *tcon,
 	rc = SMB2_ioctl(xid, tcon, cfile->fid.persistent_fid,
 			cfile->fid.volatile_fid,
 			FSCTL_SRV_ENUMERATE_SNAPSHOTS,
-			true /* is_fsctl */, NULL, 0 /* no input data */,
+			true /* is_fsctl */, false /* use_ipc */,
+			NULL, 0 /* no input data */,
 			(char **)&retbuf,
 			&ret_data_len);
 	cifs_dbg(FYI, "enum snaphots ioctl returned %d and ret buflen is %d\n",
@@ -928,6 +1132,7 @@ smb3_enum_snapshots(const unsigned int xid, struct cifs_tcon *tcon,
 		}
 		if (snapshot_in.snapshot_array_size < sizeof(struct smb_snapshot_array)) {
 			rc = -ERANGE;
+			kfree(retbuf);
 			return rc;
 		}
 
@@ -967,7 +1172,7 @@ smb2_query_dir_first(const unsigned int xid, struct cifs_tcon *tcon,
 	rc = SMB2_open(xid, &oparms, utf16_path, &oplock, NULL, NULL);
 	kfree(utf16_path);
 	if (rc) {
-		cifs_dbg(VFS, "open dir failed\n");
+		cifs_dbg(FYI, "open dir failed rc=%d\n", rc);
 		return rc;
 	}
 
@@ -977,7 +1182,7 @@ smb2_query_dir_first(const unsigned int xid, struct cifs_tcon *tcon,
 	rc = SMB2_query_directory(xid, tcon, fid->persistent_fid,
 				  fid->volatile_fid, 0, srch_inf);
 	if (rc) {
-		cifs_dbg(VFS, "query directory failed\n");
+		cifs_dbg(FYI, "query directory failed rc=%d\n", rc);
 		SMB2_close(xid, tcon, fid->persistent_fid, fid->volatile_fid);
 	}
 	return rc;
@@ -1018,6 +1223,18 @@ smb2_is_status_pending(char *buf, struct TCP_Server_Info *server, int length)
 		wake_up(&server->request_q);
 	}
 
+	return true;
+}
+
+static bool
+smb2_is_session_expired(char *buf)
+{
+	struct smb2_sync_hdr *shdr = get_sync_hdr(buf);
+
+	if (shdr->Status != STATUS_NETWORK_SESSION_EXPIRED)
+		return false;
+
+	cifs_dbg(FYI, "Session expired\n");
 	return true;
 }
 
@@ -1097,6 +1314,103 @@ smb2_new_lease_key(struct cifs_fid *fid)
 	generate_random_uuid(fid->lease_key);
 }
 
+static int
+smb2_get_dfs_refer(const unsigned int xid, struct cifs_ses *ses,
+		   const char *search_name,
+		   struct dfs_info3_param **target_nodes,
+		   unsigned int *num_of_nodes,
+		   const struct nls_table *nls_codepage, int remap)
+{
+	int rc;
+	__le16 *utf16_path = NULL;
+	int utf16_path_len = 0;
+	struct cifs_tcon *tcon;
+	struct fsctl_get_dfs_referral_req *dfs_req = NULL;
+	struct get_dfs_referral_rsp *dfs_rsp = NULL;
+	u32 dfs_req_size = 0, dfs_rsp_size = 0;
+
+	cifs_dbg(FYI, "smb2_get_dfs_refer path <%s>\n", search_name);
+
+	/*
+	 * Use any tcon from the current session. Here, the first one.
+	 */
+	spin_lock(&cifs_tcp_ses_lock);
+	tcon = list_first_entry_or_null(&ses->tcon_list, struct cifs_tcon,
+					tcon_list);
+	if (tcon)
+		tcon->tc_count++;
+	spin_unlock(&cifs_tcp_ses_lock);
+
+	if (!tcon) {
+		cifs_dbg(VFS, "session %p has no tcon available for a dfs referral request\n",
+			 ses);
+		rc = -ENOTCONN;
+		goto out;
+	}
+
+	utf16_path = cifs_strndup_to_utf16(search_name, PATH_MAX,
+					   &utf16_path_len,
+					   nls_codepage, remap);
+	if (!utf16_path) {
+		rc = -ENOMEM;
+		goto out;
+	}
+
+	dfs_req_size = sizeof(*dfs_req) + utf16_path_len;
+	dfs_req = kzalloc(dfs_req_size, GFP_KERNEL);
+	if (!dfs_req) {
+		rc = -ENOMEM;
+		goto out;
+	}
+
+	/* Highest DFS referral version understood */
+	dfs_req->MaxReferralLevel = DFS_VERSION;
+
+	/* Path to resolve in an UTF-16 null-terminated string */
+	memcpy(dfs_req->RequestFileName, utf16_path, utf16_path_len);
+
+	do {
+		/* try first with IPC */
+		rc = SMB2_ioctl(xid, tcon, NO_FILE_ID, NO_FILE_ID,
+				FSCTL_DFS_GET_REFERRALS,
+				true /* is_fsctl */, true /* use_ipc */,
+				(char *)dfs_req, dfs_req_size,
+				(char **)&dfs_rsp, &dfs_rsp_size);
+		if (rc == -ENOTCONN) {
+			/* try with normal tcon */
+			rc = SMB2_ioctl(xid, tcon, NO_FILE_ID, NO_FILE_ID,
+					FSCTL_DFS_GET_REFERRALS,
+					true /* is_fsctl */, false /*use_ipc*/,
+					(char *)dfs_req, dfs_req_size,
+					(char **)&dfs_rsp, &dfs_rsp_size);
+		}
+	} while (rc == -EAGAIN);
+
+	if (rc) {
+		cifs_dbg(VFS, "ioctl error in smb2_get_dfs_refer rc=%d\n", rc);
+		goto out;
+	}
+
+	rc = parse_dfs_referrals(dfs_rsp, dfs_rsp_size,
+				 num_of_nodes, target_nodes,
+				 nls_codepage, remap, search_name,
+				 true /* is_unicode */);
+	if (rc) {
+		cifs_dbg(VFS, "parse error in smb2_get_dfs_refer rc=%d\n", rc);
+		goto out;
+	}
+
+ out:
+	if (tcon) {
+		spin_lock(&cifs_tcp_ses_lock);
+		tcon->tc_count--;
+		spin_unlock(&cifs_tcp_ses_lock);
+	}
+	kfree(utf16_path);
+	kfree(dfs_req);
+	kfree(dfs_rsp);
+	return rc;
+}
 #define SMB2_SYMLINK_STRUCT_SIZE \
 	(sizeof(struct smb2_err_rsp) - 1 + sizeof(struct smb2_symlink_err_rsp))
 
@@ -1176,6 +1490,165 @@ smb2_query_symlink(const unsigned int xid, struct cifs_tcon *tcon,
 	return rc;
 }
 
+#ifdef CONFIG_CIFS_ACL
+static struct cifs_ntsd *
+get_smb2_acl_by_fid(struct cifs_sb_info *cifs_sb,
+		const struct cifs_fid *cifsfid, u32 *pacllen)
+{
+	struct cifs_ntsd *pntsd = NULL;
+	unsigned int xid;
+	int rc = -EOPNOTSUPP;
+	struct tcon_link *tlink = cifs_sb_tlink(cifs_sb);
+
+	if (IS_ERR(tlink))
+		return ERR_CAST(tlink);
+
+	xid = get_xid();
+	cifs_dbg(FYI, "trying to get acl\n");
+
+	rc = SMB2_query_acl(xid, tlink_tcon(tlink), cifsfid->persistent_fid,
+			    cifsfid->volatile_fid, (void **)&pntsd, pacllen);
+	free_xid(xid);
+
+	cifs_put_tlink(tlink);
+
+	cifs_dbg(FYI, "%s: rc = %d ACL len %d\n", __func__, rc, *pacllen);
+	if (rc)
+		return ERR_PTR(rc);
+	return pntsd;
+
+}
+
+static struct cifs_ntsd *
+get_smb2_acl_by_path(struct cifs_sb_info *cifs_sb,
+		const char *path, u32 *pacllen)
+{
+	struct cifs_ntsd *pntsd = NULL;
+	u8 oplock = SMB2_OPLOCK_LEVEL_NONE;
+	unsigned int xid;
+	int rc;
+	struct cifs_tcon *tcon;
+	struct tcon_link *tlink = cifs_sb_tlink(cifs_sb);
+	struct cifs_fid fid;
+	struct cifs_open_parms oparms;
+	__le16 *utf16_path;
+
+	cifs_dbg(FYI, "get smb3 acl for path %s\n", path);
+	if (IS_ERR(tlink))
+		return ERR_CAST(tlink);
+
+	tcon = tlink_tcon(tlink);
+	xid = get_xid();
+
+	if (backup_cred(cifs_sb))
+		oparms.create_options = CREATE_OPEN_BACKUP_INTENT;
+	else
+		oparms.create_options = 0;
+
+	utf16_path = cifs_convert_path_to_utf16(path, cifs_sb);
+	if (!utf16_path)
+		return ERR_PTR(-ENOMEM);
+
+	oparms.tcon = tcon;
+	oparms.desired_access = READ_CONTROL;
+	oparms.disposition = FILE_OPEN;
+	oparms.fid = &fid;
+	oparms.reconnect = false;
+
+	rc = SMB2_open(xid, &oparms, utf16_path, &oplock, NULL, NULL);
+	kfree(utf16_path);
+	if (!rc) {
+		rc = SMB2_query_acl(xid, tlink_tcon(tlink), fid.persistent_fid,
+			    fid.volatile_fid, (void **)&pntsd, pacllen);
+		SMB2_close(xid, tcon, fid.persistent_fid, fid.volatile_fid);
+	}
+
+	cifs_put_tlink(tlink);
+	free_xid(xid);
+
+	cifs_dbg(FYI, "%s: rc = %d ACL len %d\n", __func__, rc, *pacllen);
+	if (rc)
+		return ERR_PTR(rc);
+	return pntsd;
+}
+
+#ifdef CONFIG_CIFS_ACL
+static int
+set_smb2_acl(struct cifs_ntsd *pnntsd, __u32 acllen,
+		struct inode *inode, const char *path, int aclflag)
+{
+	u8 oplock = SMB2_OPLOCK_LEVEL_NONE;
+	unsigned int xid;
+	int rc, access_flags = 0;
+	struct cifs_tcon *tcon;
+	struct cifs_sb_info *cifs_sb = CIFS_SB(inode->i_sb);
+	struct tcon_link *tlink = cifs_sb_tlink(cifs_sb);
+	struct cifs_fid fid;
+	struct cifs_open_parms oparms;
+	__le16 *utf16_path;
+
+	cifs_dbg(FYI, "set smb3 acl for path %s\n", path);
+	if (IS_ERR(tlink))
+		return PTR_ERR(tlink);
+
+	tcon = tlink_tcon(tlink);
+	xid = get_xid();
+
+	if (backup_cred(cifs_sb))
+		oparms.create_options = CREATE_OPEN_BACKUP_INTENT;
+	else
+		oparms.create_options = 0;
+
+	if (aclflag == CIFS_ACL_OWNER || aclflag == CIFS_ACL_GROUP)
+		access_flags = WRITE_OWNER;
+	else
+		access_flags = WRITE_DAC;
+
+	utf16_path = cifs_convert_path_to_utf16(path, cifs_sb);
+	if (!utf16_path)
+		return -ENOMEM;
+
+	oparms.tcon = tcon;
+	oparms.desired_access = access_flags;
+	oparms.disposition = FILE_OPEN;
+	oparms.path = path;
+	oparms.fid = &fid;
+	oparms.reconnect = false;
+
+	rc = SMB2_open(xid, &oparms, utf16_path, &oplock, NULL, NULL);
+	kfree(utf16_path);
+	if (!rc) {
+		rc = SMB2_set_acl(xid, tlink_tcon(tlink), fid.persistent_fid,
+			    fid.volatile_fid, pnntsd, acllen, aclflag);
+		SMB2_close(xid, tcon, fid.persistent_fid, fid.volatile_fid);
+	}
+
+	cifs_put_tlink(tlink);
+	free_xid(xid);
+	return rc;
+}
+#endif /* CIFS_ACL */
+
+/* Retrieve an ACL from the server */
+static struct cifs_ntsd *
+get_smb2_acl(struct cifs_sb_info *cifs_sb,
+				      struct inode *inode, const char *path,
+				      u32 *pacllen)
+{
+	struct cifs_ntsd *pntsd = NULL;
+	struct cifsFileInfo *open_file = NULL;
+
+	if (inode)
+		open_file = find_readable_file(CIFS_I(inode), true);
+	if (!open_file)
+		return get_smb2_acl_by_path(cifs_sb, path, pacllen);
+
+	pntsd = get_smb2_acl_by_fid(cifs_sb, &open_file->fid, pacllen);
+	cifsFileInfo_put(open_file);
+	return pntsd;
+}
+#endif
+
 static long smb3_zero_range(struct file *file, struct cifs_tcon *tcon,
 			    loff_t offset, loff_t len, bool keep_size)
 {
@@ -1220,7 +1693,8 @@ static long smb3_zero_range(struct file *file, struct cifs_tcon *tcon,
 
 	rc = SMB2_ioctl(xid, tcon, cfile->fid.persistent_fid,
 			cfile->fid.volatile_fid, FSCTL_SET_ZERO_DATA,
-			true /* is_fctl */, (char *)&fsctl_buf,
+			true /* is_fctl */, false /* use_ipc */,
+			(char *)&fsctl_buf,
 			sizeof(struct file_zero_data_information), NULL, NULL);
 	free_xid(xid);
 	return rc;
@@ -1254,7 +1728,8 @@ static long smb3_punch_hole(struct file *file, struct cifs_tcon *tcon,
 
 	rc = SMB2_ioctl(xid, tcon, cfile->fid.persistent_fid,
 			cfile->fid.volatile_fid, FSCTL_SET_ZERO_DATA,
-			true /* is_fctl */, (char *)&fsctl_buf,
+			true /* is_fctl */, false /* use_ipc */,
+			(char *)&fsctl_buf,
 			sizeof(struct file_zero_data_information), NULL, NULL);
 	free_xid(xid);
 	return rc;
@@ -1609,6 +2084,26 @@ static void cifs_crypt_complete(struct crypto_async_request *req, int err)
 	complete(&res->completion);
 }
 
+static int
+smb2_get_enc_key(struct TCP_Server_Info *server, __u64 ses_id, int enc, u8 *key)
+{
+	struct cifs_ses *ses;
+	u8 *ses_enc_key;
+
+	spin_lock(&cifs_tcp_ses_lock);
+	list_for_each_entry(ses, &server->smb_ses_list, smb_ses_list) {
+		if (ses->Suid != ses_id)
+			continue;
+		ses_enc_key = enc ? ses->smb3encryptionkey :
+							ses->smb3decryptionkey;
+		memcpy(key, ses_enc_key, SMB3_SIGN_KEY_SIZE);
+		spin_unlock(&cifs_tcp_ses_lock);
+		return 0;
+	}
+	spin_unlock(&cifs_tcp_ses_lock);
+
+	return 1;
+}
 /*
  * Encrypt or decrypt @rqst message. @rqst has the following format:
  * iov[0] - transform header (associate data),
@@ -1622,10 +2117,10 @@ crypt_message(struct TCP_Server_Info *server, struct smb_rqst *rqst, int enc)
 	struct smb2_transform_hdr *tr_hdr =
 			(struct smb2_transform_hdr *)rqst->rq_iov[0].iov_base;
 	unsigned int assoc_data_len = sizeof(struct smb2_transform_hdr) - 24;
-	struct cifs_ses *ses;
 	int rc = 0;
 	struct scatterlist *sg;
 	u8 sign[SMB2_SIGNATURE_SIZE] = {};
+	u8 key[SMB3_SIGN_KEY_SIZE];
 	struct aead_request *req;
 	char *iv;
 	unsigned int iv_len;
@@ -1635,9 +2130,10 @@ crypt_message(struct TCP_Server_Info *server, struct smb_rqst *rqst, int enc)
 
 	init_completion(&result.completion);
 
-	ses = smb2_find_smb_ses(server, tr_hdr->SessionId);
-	if (!ses) {
-		cifs_dbg(VFS, "%s: Could not find session\n", __func__);
+	rc = smb2_get_enc_key(server, tr_hdr->SessionId, enc, key);
+	if (rc) {
+		cifs_dbg(VFS, "%s: Could not get %scryption key\n", __func__,
+			 enc ? "en" : "de");
 		return 0;
 	}
 
@@ -1649,8 +2145,7 @@ crypt_message(struct TCP_Server_Info *server, struct smb_rqst *rqst, int enc)
 
 	tfm = enc ? server->secmech.ccmaesencrypt :
 						server->secmech.ccmaesdecrypt;
-	rc = crypto_aead_setkey(tfm, enc ? ses->smb3encryptionkey :
-				ses->smb3decryptionkey, SMB3_SIGN_KEY_SIZE);
+	rc = crypto_aead_setkey(tfm, key, SMB3_SIGN_KEY_SIZE);
 	if (rc) {
 		cifs_dbg(VFS, "%s: Failed to set aead key %d\n", __func__, rc);
 		return rc;
@@ -1675,7 +2170,8 @@ crypt_message(struct TCP_Server_Info *server, struct smb_rqst *rqst, int enc)
 
 	sg = init_sg(rqst, sign);
 	if (!sg) {
-		cifs_dbg(VFS, "%s: Failed to init sg %d", __func__, rc);
+		cifs_dbg(VFS, "%s: Failed to init sg", __func__);
+		rc = -ENOMEM;
 		goto free_req;
 	}
 
@@ -1683,6 +2179,7 @@ crypt_message(struct TCP_Server_Info *server, struct smb_rqst *rqst, int enc)
 	iv = kzalloc(iv_len, GFP_KERNEL);
 	if (!iv) {
 		cifs_dbg(VFS, "%s: Failed to alloc IV", __func__);
+		rc = -ENOMEM;
 		goto free_sg;
 	}
 	iv[0] = 3;
@@ -1920,6 +2417,13 @@ handle_read_data(struct TCP_Server_Info *server, struct mid_q_entry *mid,
 	if (shdr->Command != SMB2_READ) {
 		cifs_dbg(VFS, "only big read responses are supported\n");
 		return -ENOTSUPP;
+	}
+
+	if (server->ops->is_session_expired &&
+	    server->ops->is_session_expired(buf)) {
+		cifs_reconnect(server);
+		wake_up(&server->response_q);
+		return -1;
 	}
 
 	if (server->ops->is_status_pending &&
@@ -2196,6 +2700,7 @@ struct smb_version_operations smb20_operations = {
 	.clear_stats = smb2_clear_stats,
 	.print_stats = smb2_print_stats,
 	.is_oplock_break = smb2_is_valid_oplock_break,
+	.handle_cancelled_mid = smb2_handle_cancelled_mid,
 	.downgrade_oplock = smb2_downgrade_oplock,
 	.need_neg = smb2_need_neg,
 	.negotiate = smb2_negotiate,
@@ -2238,6 +2743,7 @@ struct smb_version_operations smb20_operations = {
 	.close_dir = smb2_close_dir,
 	.calc_smb_size = smb2_calc_size,
 	.is_status_pending = smb2_is_status_pending,
+	.is_session_expired = smb2_is_session_expired,
 	.oplock_response = smb2_oplock_response,
 	.queryfs = smb2_queryfs,
 	.mand_lock = smb2_mand_lock,
@@ -2251,9 +2757,20 @@ struct smb_version_operations smb20_operations = {
 	.set_oplock_level = smb2_set_oplock_level,
 	.create_lease_buf = smb2_create_lease_buf,
 	.parse_lease_buf = smb2_parse_lease_buf,
-	.clone_range = smb2_clone_range,
+	.copychunk_range = smb2_copychunk_range,
 	.wp_retry_size = smb2_wp_retry_size,
 	.dir_needs_close = smb2_dir_needs_close,
+	.get_dfs_refer = smb2_get_dfs_refer,
+	.select_sectype = smb2_select_sectype,
+#ifdef CONFIG_CIFS_XATTR
+	.query_all_EAs = smb2_query_eas,
+	.set_EA = smb2_set_ea,
+#endif /* CIFS_XATTR */
+#ifdef CONFIG_CIFS_ACL
+	.get_acl = get_smb2_acl,
+	.get_acl_by_fid = get_smb2_acl_by_fid,
+	.set_acl = set_smb2_acl,
+#endif /* CIFS_ACL */
 };
 
 struct smb_version_operations smb21_operations = {
@@ -2276,6 +2793,7 @@ struct smb_version_operations smb21_operations = {
 	.clear_stats = smb2_clear_stats,
 	.print_stats = smb2_print_stats,
 	.is_oplock_break = smb2_is_valid_oplock_break,
+	.handle_cancelled_mid = smb2_handle_cancelled_mid,
 	.downgrade_oplock = smb2_downgrade_oplock,
 	.need_neg = smb2_need_neg,
 	.negotiate = smb2_negotiate,
@@ -2318,6 +2836,7 @@ struct smb_version_operations smb21_operations = {
 	.close_dir = smb2_close_dir,
 	.calc_smb_size = smb2_calc_size,
 	.is_status_pending = smb2_is_status_pending,
+	.is_session_expired = smb2_is_session_expired,
 	.oplock_response = smb2_oplock_response,
 	.queryfs = smb2_queryfs,
 	.mand_lock = smb2_mand_lock,
@@ -2331,10 +2850,21 @@ struct smb_version_operations smb21_operations = {
 	.set_oplock_level = smb21_set_oplock_level,
 	.create_lease_buf = smb2_create_lease_buf,
 	.parse_lease_buf = smb2_parse_lease_buf,
-	.clone_range = smb2_clone_range,
+	.copychunk_range = smb2_copychunk_range,
 	.wp_retry_size = smb2_wp_retry_size,
 	.dir_needs_close = smb2_dir_needs_close,
 	.enum_snapshots = smb3_enum_snapshots,
+	.get_dfs_refer = smb2_get_dfs_refer,
+	.select_sectype = smb2_select_sectype,
+#ifdef CONFIG_CIFS_XATTR
+	.query_all_EAs = smb2_query_eas,
+	.set_EA = smb2_set_ea,
+#endif /* CIFS_XATTR */
+#ifdef CONFIG_CIFS_ACL
+	.get_acl = get_smb2_acl,
+	.get_acl_by_fid = get_smb2_acl_by_fid,
+	.set_acl = set_smb2_acl,
+#endif /* CIFS_ACL */
 };
 
 struct smb_version_operations smb30_operations = {
@@ -2358,6 +2888,7 @@ struct smb_version_operations smb30_operations = {
 	.print_stats = smb2_print_stats,
 	.dump_share_caps = smb2_dump_share_caps,
 	.is_oplock_break = smb2_is_valid_oplock_break,
+	.handle_cancelled_mid = smb2_handle_cancelled_mid,
 	.downgrade_oplock = smb2_downgrade_oplock,
 	.need_neg = smb2_need_neg,
 	.negotiate = smb2_negotiate,
@@ -2400,6 +2931,7 @@ struct smb_version_operations smb30_operations = {
 	.close_dir = smb2_close_dir,
 	.calc_smb_size = smb2_calc_size,
 	.is_status_pending = smb2_is_status_pending,
+	.is_session_expired = smb2_is_session_expired,
 	.oplock_response = smb2_oplock_response,
 	.queryfs = smb2_queryfs,
 	.mand_lock = smb2_mand_lock,
@@ -2415,7 +2947,7 @@ struct smb_version_operations smb30_operations = {
 	.set_oplock_level = smb3_set_oplock_level,
 	.create_lease_buf = smb3_create_lease_buf,
 	.parse_lease_buf = smb3_parse_lease_buf,
-	.clone_range = smb2_clone_range,
+	.copychunk_range = smb2_copychunk_range,
 	.duplicate_extents = smb2_duplicate_extents,
 	.validate_negotiate = smb3_validate_negotiate,
 	.wp_retry_size = smb2_wp_retry_size,
@@ -2426,6 +2958,17 @@ struct smb_version_operations smb30_operations = {
 	.free_transform_rq = smb3_free_transform_rq,
 	.is_transform_hdr = smb3_is_transform_hdr,
 	.receive_transform = smb3_receive_transform,
+	.get_dfs_refer = smb2_get_dfs_refer,
+	.select_sectype = smb2_select_sectype,
+#ifdef CONFIG_CIFS_XATTR
+	.query_all_EAs = smb2_query_eas,
+	.set_EA = smb2_set_ea,
+#endif /* CIFS_XATTR */
+#ifdef CONFIG_CIFS_ACL
+	.get_acl = get_smb2_acl,
+	.get_acl_by_fid = get_smb2_acl_by_fid,
+	.set_acl = set_smb2_acl,
+#endif /* CIFS_ACL */
 };
 
 #ifdef CONFIG_CIFS_SMB311
@@ -2450,6 +2993,7 @@ struct smb_version_operations smb311_operations = {
 	.print_stats = smb2_print_stats,
 	.dump_share_caps = smb2_dump_share_caps,
 	.is_oplock_break = smb2_is_valid_oplock_break,
+	.handle_cancelled_mid = smb2_handle_cancelled_mid,
 	.downgrade_oplock = smb2_downgrade_oplock,
 	.need_neg = smb2_need_neg,
 	.negotiate = smb2_negotiate,
@@ -2492,6 +3036,7 @@ struct smb_version_operations smb311_operations = {
 	.close_dir = smb2_close_dir,
 	.calc_smb_size = smb2_calc_size,
 	.is_status_pending = smb2_is_status_pending,
+	.is_session_expired = smb2_is_session_expired,
 	.oplock_response = smb2_oplock_response,
 	.queryfs = smb2_queryfs,
 	.mand_lock = smb2_mand_lock,
@@ -2507,7 +3052,7 @@ struct smb_version_operations smb311_operations = {
 	.set_oplock_level = smb3_set_oplock_level,
 	.create_lease_buf = smb3_create_lease_buf,
 	.parse_lease_buf = smb3_parse_lease_buf,
-	.clone_range = smb2_clone_range,
+	.copychunk_range = smb2_copychunk_range,
 	.duplicate_extents = smb2_duplicate_extents,
 /*	.validate_negotiate = smb3_validate_negotiate, */ /* not used in 3.11 */
 	.wp_retry_size = smb2_wp_retry_size,
@@ -2518,6 +3063,12 @@ struct smb_version_operations smb311_operations = {
 	.free_transform_rq = smb3_free_transform_rq,
 	.is_transform_hdr = smb3_is_transform_hdr,
 	.receive_transform = smb3_receive_transform,
+	.get_dfs_refer = smb2_get_dfs_refer,
+	.select_sectype = smb2_select_sectype,
+#ifdef CONFIG_CIFS_XATTR
+	.query_all_EAs = smb2_query_eas,
+	.set_EA = smb2_set_ea,
+#endif /* CIFS_XATTR */
 };
 #endif /* CIFS_SMB311 */
 
@@ -2559,6 +3110,46 @@ struct smb_version_values smb21_values = {
 	.signing_enabled = SMB2_NEGOTIATE_SIGNING_ENABLED | SMB2_NEGOTIATE_SIGNING_REQUIRED,
 	.signing_required = SMB2_NEGOTIATE_SIGNING_REQUIRED,
 	.create_lease_size = sizeof(struct create_lease),
+};
+
+struct smb_version_values smb3any_values = {
+	.version_string = SMB3ANY_VERSION_STRING,
+	.protocol_id = SMB302_PROT_ID, /* doesn't matter, send protocol array */
+	.req_capabilities = SMB2_GLOBAL_CAP_DFS | SMB2_GLOBAL_CAP_LEASING | SMB2_GLOBAL_CAP_LARGE_MTU | SMB2_GLOBAL_CAP_PERSISTENT_HANDLES | SMB2_GLOBAL_CAP_ENCRYPTION,
+	.large_lock_type = 0,
+	.exclusive_lock_type = SMB2_LOCKFLAG_EXCLUSIVE_LOCK,
+	.shared_lock_type = SMB2_LOCKFLAG_SHARED_LOCK,
+	.unlock_lock_type = SMB2_LOCKFLAG_UNLOCK,
+	.header_size = sizeof(struct smb2_hdr),
+	.max_header_size = MAX_SMB2_HDR_SIZE,
+	.read_rsp_size = sizeof(struct smb2_read_rsp) - 1,
+	.lock_cmd = SMB2_LOCK,
+	.cap_unix = 0,
+	.cap_nt_find = SMB2_NT_FIND,
+	.cap_large_files = SMB2_LARGE_FILES,
+	.signing_enabled = SMB2_NEGOTIATE_SIGNING_ENABLED | SMB2_NEGOTIATE_SIGNING_REQUIRED,
+	.signing_required = SMB2_NEGOTIATE_SIGNING_REQUIRED,
+	.create_lease_size = sizeof(struct create_lease_v2),
+};
+
+struct smb_version_values smbdefault_values = {
+	.version_string = SMBDEFAULT_VERSION_STRING,
+	.protocol_id = SMB302_PROT_ID, /* doesn't matter, send protocol array */
+	.req_capabilities = SMB2_GLOBAL_CAP_DFS | SMB2_GLOBAL_CAP_LEASING | SMB2_GLOBAL_CAP_LARGE_MTU | SMB2_GLOBAL_CAP_PERSISTENT_HANDLES | SMB2_GLOBAL_CAP_ENCRYPTION,
+	.large_lock_type = 0,
+	.exclusive_lock_type = SMB2_LOCKFLAG_EXCLUSIVE_LOCK,
+	.shared_lock_type = SMB2_LOCKFLAG_SHARED_LOCK,
+	.unlock_lock_type = SMB2_LOCKFLAG_UNLOCK,
+	.header_size = sizeof(struct smb2_hdr),
+	.max_header_size = MAX_SMB2_HDR_SIZE,
+	.read_rsp_size = sizeof(struct smb2_read_rsp) - 1,
+	.lock_cmd = SMB2_LOCK,
+	.cap_unix = 0,
+	.cap_nt_find = SMB2_NT_FIND,
+	.cap_large_files = SMB2_LARGE_FILES,
+	.signing_enabled = SMB2_NEGOTIATE_SIGNING_ENABLED | SMB2_NEGOTIATE_SIGNING_REQUIRED,
+	.signing_required = SMB2_NEGOTIATE_SIGNING_REQUIRED,
+	.create_lease_size = sizeof(struct create_lease_v2),
 };
 
 struct smb_version_values smb30_values = {
@@ -2605,7 +3196,7 @@ struct smb_version_values smb302_values = {
 struct smb_version_values smb311_values = {
 	.version_string = SMB311_VERSION_STRING,
 	.protocol_id = SMB311_PROT_ID,
-	.req_capabilities = SMB2_GLOBAL_CAP_DFS | SMB2_GLOBAL_CAP_LEASING | SMB2_GLOBAL_CAP_LARGE_MTU | SMB2_GLOBAL_CAP_PERSISTENT_HANDLES,
+	.req_capabilities = SMB2_GLOBAL_CAP_DFS | SMB2_GLOBAL_CAP_LEASING | SMB2_GLOBAL_CAP_LARGE_MTU | SMB2_GLOBAL_CAP_PERSISTENT_HANDLES | SMB2_GLOBAL_CAP_ENCRYPTION,
 	.large_lock_type = 0,
 	.exclusive_lock_type = SMB2_LOCKFLAG_EXCLUSIVE_LOCK,
 	.shared_lock_type = SMB2_LOCKFLAG_SHARED_LOCK,

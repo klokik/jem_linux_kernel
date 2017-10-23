@@ -57,6 +57,19 @@ static void marshal_det_to_rele(struct dk_cxlflash_detach *detach,
 }
 
 /**
+ * marshal_udir_to_rele() - translate udirect to release structure
+ * @udirect:	Source structure from which to translate/copy.
+ * @release:	Destination structure for the translate/copy.
+ */
+static void marshal_udir_to_rele(struct dk_cxlflash_udirect *udirect,
+				 struct dk_cxlflash_release *release)
+{
+	release->hdr = udirect->hdr;
+	release->context_id = udirect->context_id;
+	release->rsrc_handle = udirect->rsrc_handle;
+}
+
+/**
  * cxlflash_free_errpage() - frees resources associated with global error page
  */
 void cxlflash_free_errpage(void)
@@ -78,17 +91,18 @@ void cxlflash_free_errpage(void)
  * memory freed. This is accomplished by putting the contexts in error
  * state which will notify the user and let them 'drive' the tear down.
  * Meanwhile, this routine camps until all user contexts have been removed.
+ *
+ * Note that the main loop in this routine will always execute at least once
+ * to flush the reset_waitq.
  */
 void cxlflash_stop_term_user_contexts(struct cxlflash_cfg *cfg)
 {
 	struct device *dev = &cfg->dev->dev;
-	int i, found;
+	int i, found = true;
 
 	cxlflash_mark_contexts_error(cfg);
 
 	while (true) {
-		found = false;
-
 		for (i = 0; i < MAX_CONTEXT; i++)
 			if (cfg->ctx_tbl[i]) {
 				found = true;
@@ -102,6 +116,7 @@ void cxlflash_stop_term_user_contexts(struct cxlflash_cfg *cfg)
 			__func__);
 		wake_up_all(&cfg->reset_waitq);
 		ssleep(1);
+		found = false;
 	}
 }
 
@@ -252,6 +267,7 @@ static int afu_attach(struct cxlflash_cfg *cfg, struct ctx_info *ctxi)
 	struct afu *afu = cfg->afu;
 	struct sisl_ctrl_map __iomem *ctrl_map = ctxi->ctrl_map;
 	int rc = 0;
+	struct hwq *hwq = get_hwq(afu, PRIMARY_HWQ);
 	u64 val;
 
 	/* Unlock cap and restrict user to read/write cmds in translated mode */
@@ -268,7 +284,7 @@ static int afu_attach(struct cxlflash_cfg *cfg, struct ctx_info *ctxi)
 
 	/* Set up MMIO registers pointing to the RHT */
 	writeq_be((u64)ctxi->rht_start, &ctrl_map->rht_start);
-	val = SISL_RHT_CNT_ID((u64)MAX_RHT_PER_CONTEXT, (u64)(afu->ctx_hndl));
+	val = SISL_RHT_CNT_ID((u64)MAX_RHT_PER_CONTEXT, (u64)(hwq->ctx_hndl));
 	writeq_be(val, &ctrl_map->rht_cnt_id);
 out:
 	dev_dbg(dev, "%s: returning rc=%d\n", __func__, rc);
@@ -305,6 +321,7 @@ static int read_cap16(struct scsi_device *sdev, struct llun_info *lli)
 	struct cxlflash_cfg *cfg = shost_priv(sdev->host);
 	struct device *dev = &cfg->dev->dev;
 	struct glun_info *gli = lli->parent;
+	struct scsi_sense_hdr sshdr;
 	u8 *cmd_buf = NULL;
 	u8 *scsi_cmd = NULL;
 	u8 *sense_buf = NULL;
@@ -332,7 +349,8 @@ retry:
 	/* Drop the ioctl read semahpore across lengthy call */
 	up_read(&cfg->ioctl_rwsem);
 	result = scsi_execute(sdev, scsi_cmd, DMA_FROM_DEVICE, cmd_buf,
-			      CMD_BUFSIZE, sense_buf, to, CMD_RETRIES, 0, NULL);
+			      CMD_BUFSIZE, sense_buf, &sshdr, to, CMD_RETRIES,
+			      0, 0, NULL);
 	down_read(&cfg->ioctl_rwsem);
 	rc = check_state(cfg);
 	if (rc) {
@@ -345,10 +363,6 @@ retry:
 	if (driver_byte(result) == DRIVER_SENSE) {
 		result &= ~(0xFF<<24); /* DRIVER_SENSE is not an error */
 		if (result & SAM_STAT_CHECK_CONDITION) {
-			struct scsi_sense_hdr sshdr;
-
-			scsi_normalize_sense(sense_buf, SCSI_SENSE_BUFFERSIZE,
-					    &sshdr);
 			switch (sshdr.sense_key) {
 			case NO_SENSE:
 			case RECOVERED_ERROR:
@@ -621,6 +635,7 @@ int _cxlflash_disk_release(struct scsi_device *sdev,
 	res_hndl_t rhndl = release->rsrc_handle;
 
 	int rc = 0;
+	int rcr = 0;
 	u64 ctxid = DECODE_CTXID(release->context_id),
 	    rctxid = release->context_id;
 
@@ -685,8 +700,12 @@ int _cxlflash_disk_release(struct scsi_device *sdev,
 		rhte_f1->dw = 0;
 		dma_wmb(); /* Make RHT entry bottom-half clearing visible */
 
-		if (!ctxi->err_recovery_active)
-			cxlflash_afu_sync(afu, ctxid, rhndl, AFU_HW_SYNC);
+		if (!ctxi->err_recovery_active) {
+			rcr = cxlflash_afu_sync(afu, ctxid, rhndl, AFU_HW_SYNC);
+			if (unlikely(rcr))
+				dev_dbg(dev, "%s: AFU sync failed rc=%d\n",
+					__func__, rcr);
+		}
 		break;
 	default:
 		WARN(1, "Unsupported LUN mode!");
@@ -1053,7 +1072,6 @@ out:
 
 /**
  * cxlflash_mmap_fault() - mmap fault handler for adapter file descriptor
- * @vma:	VM area associated with mapping.
  * @vmf:	VM fault associated with current fault.
  *
  * To support error notification via MMIO, faults are 'caught' by this routine
@@ -1067,8 +1085,9 @@ out:
  *
  * Return: 0 on success, VM_FAULT_SIGBUS on failure
  */
-static int cxlflash_mmap_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
+static int cxlflash_mmap_fault(struct vm_fault *vmf)
 {
+	struct vm_area_struct *vma = vmf->vma;
 	struct file *file = vma->vm_file;
 	struct cxl_context *ctx = cxl_fops_get_context(file);
 	struct cxlflash_cfg *cfg = container_of(file->f_op, struct cxlflash_cfg,
@@ -1097,7 +1116,7 @@ static int cxlflash_mmap_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 
 	if (likely(!ctxi->err_recovery_active)) {
 		vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
-		rc = ctxi->cxl_mmap_vmops->fault(vma, vmf);
+		rc = ctxi->cxl_mmap_vmops->fault(vmf);
 	} else {
 		dev_dbg(dev, "%s: err recovery active, use err_page\n",
 			__func__);
@@ -1371,6 +1390,7 @@ static int cxlflash_disk_attach(struct scsi_device *sdev,
 	if (unlikely(!ctxi)) {
 		dev_err(dev, "%s: Failed to create context ctxid=%d\n",
 			__func__, ctxid);
+		rc = -ENOMEM;
 		goto err;
 	}
 
@@ -1626,10 +1646,12 @@ static int cxlflash_afu_recover(struct scsi_device *sdev,
 	struct afu *afu = cfg->afu;
 	struct ctx_info *ctxi = NULL;
 	struct mutex *mutex = &cfg->ctx_recovery_mutex;
+	struct hwq *hwq = get_hwq(afu, PRIMARY_HWQ);
 	u64 flags;
 	u64 ctxid = DECODE_CTXID(recover->context_id),
 	    rctxid = recover->context_id;
 	long reg;
+	bool locked = true;
 	int lretry = 20; /* up to 2 seconds */
 	int new_adap_fd = -1;
 	int rc = 0;
@@ -1638,8 +1660,11 @@ static int cxlflash_afu_recover(struct scsi_device *sdev,
 	up_read(&cfg->ioctl_rwsem);
 	rc = mutex_lock_interruptible(mutex);
 	down_read(&cfg->ioctl_rwsem);
-	if (rc)
+	if (rc) {
+		locked = false;
 		goto out;
+	}
+
 	rc = check_state(cfg);
 	if (rc) {
 		dev_err(dev, "%s: Failed state rc=%d\n", __func__, rc);
@@ -1673,8 +1698,10 @@ retry_recover:
 				mutex_unlock(mutex);
 				msleep(100);
 				rc = mutex_lock_interruptible(mutex);
-				if (rc)
+				if (rc) {
+					locked = false;
 					goto out;
+				}
 				goto retry_recover;
 			}
 
@@ -1696,7 +1723,7 @@ retry_recover:
 	}
 
 	/* Test if in error state */
-	reg = readq_be(&afu->ctrl_map->mbox_r);
+	reg = readq_be(&hwq->ctrl_map->mbox_r);
 	if (reg == -1) {
 		dev_dbg(dev, "%s: MMIO fail, wait for recovery.\n", __func__);
 
@@ -1718,7 +1745,8 @@ retry_recover:
 out:
 	if (likely(ctxi))
 		put_context(ctxi);
-	mutex_unlock(mutex);
+	if (locked)
+		mutex_unlock(mutex);
 	atomic_dec_if_positive(&cfg->recovery_threads);
 	return rc;
 }
@@ -1927,6 +1955,7 @@ static int cxlflash_disk_direct_open(struct scsi_device *sdev, void *arg)
 	struct afu *afu = cfg->afu;
 	struct llun_info *lli = sdev->hostdata;
 	struct glun_info *gli = lli->parent;
+	struct dk_cxlflash_release rel = { { 0 }, 0 };
 
 	struct dk_cxlflash_udirect *pphys = (struct dk_cxlflash_udirect *)arg;
 
@@ -1935,7 +1964,7 @@ static int cxlflash_disk_direct_open(struct scsi_device *sdev, void *arg)
 	u64 lun_size = 0;
 	u64 last_lba = 0;
 	u64 rsrc_handle = -1;
-	u32 port = CHAN2PORT(sdev->channel);
+	u32 port = CHAN2PORTMASK(sdev->channel);
 
 	int rc = 0;
 
@@ -1968,12 +1997,17 @@ static int cxlflash_disk_direct_open(struct scsi_device *sdev, void *arg)
 	rsrc_handle = (rhte - ctxi->rht_start);
 
 	rht_format1(rhte, lli->lun_id[sdev->channel], ctxi->rht_perms, port);
-	cxlflash_afu_sync(afu, ctxid, rsrc_handle, AFU_LW_SYNC);
 
 	last_lba = gli->max_lba;
 	pphys->hdr.return_flags = 0;
 	pphys->last_lba = last_lba;
 	pphys->rsrc_handle = rsrc_handle;
+
+	rc = cxlflash_afu_sync(afu, ctxid, rsrc_handle, AFU_LW_SYNC);
+	if (unlikely(rc)) {
+		dev_dbg(dev, "%s: AFU sync failed rc=%d\n", __func__, rc);
+		goto err2;
+	}
 
 out:
 	if (likely(ctxi))
@@ -1982,6 +2016,10 @@ out:
 		__func__, rsrc_handle, rc, last_lba);
 	return rc;
 
+err2:
+	marshal_udir_to_rele(pphys, &rel);
+	_cxlflash_disk_release(sdev, ctxi, &rel);
+	goto out;
 err1:
 	cxlflash_lun_detach(gli);
 	goto out;

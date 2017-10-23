@@ -97,7 +97,7 @@ enum {
 #define	PMC_GLOBAL_INT_BIT0		0x00000001
 
 #ifndef AAC_DRIVER_BUILD
-# define AAC_DRIVER_BUILD 50740
+# define AAC_DRIVER_BUILD 50834
 # define AAC_DRIVER_BRANCH "-custom"
 #endif
 #define MAXIMUM_NUM_CONTAINERS	32
@@ -415,6 +415,7 @@ struct aac_ciss_identify_pd {
  * These macros convert from physical channels to virtual channels
  */
 #define CONTAINER_CHANNEL		(0)
+#define NATIVE_CHANNEL			(1)
 #define CONTAINER_TO_CHANNEL(cont)	(CONTAINER_CHANNEL)
 #define CONTAINER_TO_ID(cont)		(cont)
 #define CONTAINER_TO_LUN(cont)		(0)
@@ -423,7 +424,6 @@ struct aac_ciss_identify_pd {
 #define PMC_DEVICE_S6	0x28b
 #define PMC_DEVICE_S7	0x28c
 #define PMC_DEVICE_S8	0x28d
-#define PMC_DEVICE_S9	0x28f
 
 #define aac_phys_to_logical(x)  ((x)+1)
 #define aac_logical_to_phys(x)  ((x)?(x)-1:0)
@@ -1380,57 +1380,57 @@ struct aac_adapter_info
 
 struct aac_supplement_adapter_info
 {
-	u8	AdapterTypeText[17+1];
-	u8	Pad[2];
-	__le32	FlashMemoryByteSize;
-	__le32	FlashImageId;
-	__le32	MaxNumberPorts;
-	__le32	Version;
-	__le32	FeatureBits;
-	u8	SlotNumber;
-	u8	ReservedPad0[3];
-	u8	BuildDate[12];
-	__le32	CurrentNumberPorts;
+	u8	adapter_type_text[17+1];
+	u8	pad[2];
+	__le32	flash_memory_byte_size;
+	__le32	flash_image_id;
+	__le32	max_number_ports;
+	__le32	version;
+	__le32	feature_bits;
+	u8	slot_number;
+	u8	reserved_pad0[3];
+	u8	build_date[12];
+	__le32	current_number_ports;
 	struct {
-		u8	AssemblyPn[8];
-		u8	FruPn[8];
-		u8	BatteryFruPn[8];
-		u8	EcVersionString[8];
-		u8	Tsid[12];
-	}	VpdInfo;
-	__le32	FlashFirmwareRevision;
-	__le32	FlashFirmwareBuild;
-	__le32	RaidTypeMorphOptions;
-	__le32	FlashFirmwareBootRevision;
-	__le32	FlashFirmwareBootBuild;
-	u8	MfgPcbaSerialNo[12];
-	u8	MfgWWNName[8];
-	__le32	SupportedOptions2;
-	__le32	StructExpansion;
+		u8	assembly_pn[8];
+		u8	fru_pn[8];
+		u8	battery_fru_pn[8];
+		u8	ec_version_string[8];
+		u8	tsid[12];
+	}	vpd_info;
+	__le32	flash_firmware_revision;
+	__le32	flash_firmware_build;
+	__le32	raid_type_morph_options;
+	__le32	flash_firmware_boot_revision;
+	__le32	flash_firmware_boot_build;
+	u8	mfg_pcba_serial_no[12];
+	u8	mfg_wwn_name[8];
+	__le32	supported_options2;
+	__le32	struct_expansion;
 	/* StructExpansion == 1 */
-	__le32	FeatureBits3;
-	__le32	SupportedPerformanceModes;
-	u8	HostBusType;		/* uses HOST_BUS_TYPE_xxx defines */
-	u8	HostBusWidth;		/* actual width in bits or links */
-	u16	HostBusSpeed;		/* actual bus speed/link rate in MHz */
-	u8	MaxRRCDrives;		/* max. number of ITP-RRC drives/pool */
-	u8	MaxDiskXtasks;		/* max. possible num of DiskX Tasks */
+	__le32	feature_bits3;
+	__le32	supported_performance_modes;
+	u8	host_bus_type;		/* uses HOST_BUS_TYPE_xxx defines */
+	u8	host_bus_width;		/* actual width in bits or links */
+	u16	host_bus_speed;		/* actual bus speed/link rate in MHz */
+	u8	max_rrc_drives;		/* max. number of ITP-RRC drives/pool */
+	u8	max_disk_xtasks;	/* max. possible num of DiskX Tasks */
 
-	u8	CpldVerLoaded;
-	u8	CpldVerInFlash;
+	u8	cpld_ver_loaded;
+	u8	cpld_ver_in_flash;
 
-	__le64	MaxRRCCapacity;
-	__le32	CompiledMaxHistLogLevel;
-	u8	CustomBoardName[12];
-	u16	SupportedCntlrMode;	/* identify supported controller mode */
-	u16	ReservedForFuture16;
-	__le32	SupportedOptions3;	/* reserved for future options */
+	__le64	max_rrc_capacity;
+	__le32	compiled_max_hist_log_level;
+	u8	custom_board_name[12];
+	u16	supported_cntlr_mode;	/* identify supported controller mode */
+	u16	reserved_for_future16;
+	__le32	supported_options3;	/* reserved for future options */
 
-	__le16	VirtDeviceBus;		/* virt. SCSI device for Thor */
-	__le16	VirtDeviceTarget;
-	__le16	VirtDeviceLUN;
-	__le16	Unused;
-	__le32	ReservedForFutureGrowth[68];
+	__le16	virt_device_bus;		/* virt. SCSI device for Thor */
+	__le16	virt_device_target;
+	__le16	virt_device_lun;
+	__le16	unused;
+	__le32	reserved_for_future_growth[68];
 
 };
 #define AAC_FEATURE_FALCON	cpu_to_le32(0x00000010)
@@ -1444,6 +1444,10 @@ struct aac_supplement_adapter_info
 #define AAC_OPTION_VARIABLE_BLOCK_SIZE	cpu_to_le32(0x00040000)
 /* 240 simple volume support */
 #define AAC_OPTION_SUPPORTED_240_VOLUMES cpu_to_le32(0x10000000)
+/*
+ * Supports FIB dump sync command send prior to IOP_RESET
+ */
+#define AAC_OPTION_SUPPORTED3_IOP_RESET_FIB_DUMP	cpu_to_le32(0x00004000)
 #define AAC_SIS_VERSION_V3	3
 #define AAC_SIS_SLOT_UNKNOWN	0xFF
 
@@ -1686,9 +1690,6 @@ struct aac_dev
 #define aac_adapter_sync_cmd(dev, command, p1, p2, p3, p4, p5, p6, status, r1, r2, r3, r4) \
 	(dev)->a_ops.adapter_sync_cmd(dev, command, p1, p2, p3, p4, p5, p6, status, r1, r2, r3, r4)
 
-#define aac_adapter_check_health(dev) \
-	(dev)->a_ops.adapter_check_health(dev)
-
 #define aac_adapter_restart(dev, bled, reset_type) \
 	((dev)->a_ops.adapter_restart(dev, bled, reset_type))
 
@@ -1722,6 +1723,7 @@ struct aac_dev
 #define FIB_CONTEXT_FLAG_FASTRESP		(0x00000008)
 #define FIB_CONTEXT_FLAG_NATIVE_HBA		(0x00000010)
 #define FIB_CONTEXT_FLAG_NATIVE_HBA_TMF	(0x00000020)
+#define FIB_CONTEXT_FLAG_SCSI_CMD	(0x00000040)
 
 /*
  *	Define the command values
@@ -2273,7 +2275,7 @@ struct aac_get_name_resp {
 	__le32		parm3;
 	__le32		parm4;
 	__le32		parm5;
-	u8		data[16];
+	u8		data[17];
 };
 
 #define CT_CID_TO_32BITS_UID 165
@@ -2374,6 +2376,7 @@ struct revision
 /* HW Soft Reset register offset */
 #define IBW_SWR_OFFSET				0x4000
 #define SOFT_RESET_TIME			60
+
 
 
 struct aac_common
@@ -2483,9 +2486,12 @@ struct aac_hba_info {
 #define GET_DRIVER_BUFFER_PROPERTIES	0x00000023
 #define RCV_TEMP_READINGS		0x00000025
 #define GET_COMM_PREFERRED_SETTINGS	0x00000026
+#define IOP_RESET_FW_FIB_DUMP		0x00000034
 #define IOP_RESET			0x00001000
 #define IOP_RESET_ALWAYS		0x00001001
-#define RE_INIT_ADAPTER			0x000000ee
+#define RE_INIT_ADAPTER		0x000000ee
+
+#define IOP_SRC_RESET_MASK		0x00000100
 
 /*
  *	Adapter Status Register
@@ -2510,6 +2516,7 @@ struct aac_hba_info {
 
 #define	SELF_TEST_FAILED		0x00000004
 #define	MONITOR_PANIC			0x00000020
+#define	KERNEL_BOOTING			0x00000040
 #define	KERNEL_UP_AND_RUNNING		0x00000080
 #define	KERNEL_PANIC			0x00000100
 #define	FLASH_UPD_PENDING		0x00002000
@@ -2610,6 +2617,14 @@ static inline unsigned int cap_to_cyls(sector_t capacity, unsigned divisor)
 	return capacity;
 }
 
+static inline int aac_adapter_check_health(struct aac_dev *dev)
+{
+	if (unlikely(pci_channel_offline(dev->pdev)))
+		return -1;
+
+	return (dev)->a_ops.adapter_check_health(dev);
+}
+
 /* SCp.phase values */
 #define AAC_OWNER_MIDLEVEL	0x101
 #define AAC_OWNER_LOWLEVEL	0x102
@@ -2639,6 +2654,7 @@ void aac_hba_callback(void *context, struct fib *fibptr);
 #define fib_data(fibctx) ((void *)(fibctx)->hw_fib_va->data)
 struct aac_dev *aac_init_adapter(struct aac_dev *dev);
 void aac_src_access_devreg(struct aac_dev *dev, int mode);
+void aac_set_intx_mode(struct aac_dev *dev);
 int aac_get_config_status(struct aac_dev *dev, int commit_flag);
 int aac_get_containers(struct aac_dev *dev);
 int aac_scsi_cmd(struct scsi_cmnd *cmd);
@@ -2673,6 +2689,23 @@ int aac_probe_container(struct aac_dev *dev, int cid);
 int _aac_rx_init(struct aac_dev *dev);
 int aac_rx_select_comm(struct aac_dev *dev, int comm);
 int aac_rx_deliver_producer(struct fib * fib);
+
+static inline int aac_is_src(struct aac_dev *dev)
+{
+	u16 device = dev->pdev->device;
+
+	if (device == PMC_DEVICE_S6 ||
+		device == PMC_DEVICE_S7 ||
+		device == PMC_DEVICE_S8)
+		return 1;
+	return 0;
+}
+
+static inline int aac_supports_2T(struct aac_dev *dev)
+{
+	return (dev->adapter_info.options & AAC_OPT_NEW_COMM_64);
+}
+
 char * get_container_type(unsigned type);
 extern int numacb;
 extern char aac_driver_version[];
@@ -2685,4 +2718,5 @@ extern int aac_commit;
 extern int update_interval;
 extern int check_interval;
 extern int aac_check_reset;
+extern int aac_fib_dump;
 #endif

@@ -8,6 +8,7 @@
  */
 
 #include <linux/mm.h>
+#include <linux/sched/signal.h>
 #include <linux/pagemap.h>
 #include <linux/rmap.h>
 #include <linux/swap.h>
@@ -127,19 +128,22 @@ out_unlock:
 static pmd_t *mm_alloc_pmd(struct mm_struct *mm, unsigned long address)
 {
 	pgd_t *pgd;
+	p4d_t *p4d;
 	pud_t *pud;
-	pmd_t *pmd = NULL;
 
 	pgd = pgd_offset(mm, address);
-	pud = pud_alloc(mm, pgd, address);
-	if (pud)
-		/*
-		 * Note that we didn't run this because the pmd was
-		 * missing, the *pmd may be already established and in
-		 * turn it may also be a trans_huge_pmd.
-		 */
-		pmd = pmd_alloc(mm, pud, address);
-	return pmd;
+	p4d = p4d_alloc(mm, pgd, address);
+	if (!p4d)
+		return NULL;
+	pud = pud_alloc(mm, p4d, address);
+	if (!pud)
+		return NULL;
+	/*
+	 * Note that we didn't run this because the pmd was
+	 * missing, the *pmd may be already established and in
+	 * turn it may also be a trans_huge_pmd.
+	 */
+	return pmd_alloc(mm, pud, address);
 }
 
 #ifdef CONFIG_HUGETLB_PAGE
@@ -197,20 +201,23 @@ retry:
 	 * retry, dst_vma will be set to NULL and we must lookup again.
 	 */
 	if (!dst_vma) {
-		err = -EINVAL;
+		err = -ENOENT;
 		dst_vma = find_vma(dst_mm, dst_start);
 		if (!dst_vma || !is_vm_hugetlb_page(dst_vma))
 			goto out_unlock;
-
-		if (vma_hpagesize != vma_kernel_pagesize(dst_vma))
+		/*
+		 * Only allow __mcopy_atomic_hugetlb on userfaultfd
+		 * registered ranges.
+		 */
+		if (!dst_vma->vm_userfaultfd_ctx.ctx)
 			goto out_unlock;
 
-		/*
-		 * Make sure the remaining dst range is both valid and
-		 * fully within a single existing vma.
-		 */
 		if (dst_start < dst_vma->vm_start ||
 		    dst_start + len > dst_vma->vm_end)
+			goto out_unlock;
+
+		err = -EINVAL;
+		if (vma_hpagesize != vma_kernel_pagesize(dst_vma))
 			goto out_unlock;
 
 		vm_shared = dst_vma->vm_flags & VM_SHARED;
@@ -218,12 +225,6 @@ retry:
 
 	if (WARN_ON(dst_addr & (vma_hpagesize - 1) ||
 		    (len - copied) & (vma_hpagesize - 1)))
-		goto out_unlock;
-
-	/*
-	 * Only allow __mcopy_atomic_hugetlb on userfaultfd registered ranges.
-	 */
-	if (!dst_vma->vm_userfaultfd_ctx.ctx)
 		goto out_unlock;
 
 	/*
@@ -370,6 +371,36 @@ extern ssize_t __mcopy_atomic_hugetlb(struct mm_struct *dst_mm,
 				      bool zeropage);
 #endif /* CONFIG_HUGETLB_PAGE */
 
+static __always_inline ssize_t mfill_atomic_pte(struct mm_struct *dst_mm,
+						pmd_t *dst_pmd,
+						struct vm_area_struct *dst_vma,
+						unsigned long dst_addr,
+						unsigned long src_addr,
+						struct page **page,
+						bool zeropage)
+{
+	ssize_t err;
+
+	if (vma_is_anonymous(dst_vma)) {
+		if (!zeropage)
+			err = mcopy_atomic_pte(dst_mm, dst_pmd, dst_vma,
+					       dst_addr, src_addr, page);
+		else
+			err = mfill_zeropage_pte(dst_mm, dst_pmd,
+						 dst_vma, dst_addr);
+	} else {
+		if (!zeropage)
+			err = shmem_mcopy_atomic_pte(dst_mm, dst_pmd,
+						     dst_vma, dst_addr,
+						     src_addr, page);
+		else
+			err = shmem_mfill_zeropage_pte(dst_mm, dst_pmd,
+						       dst_vma, dst_addr);
+	}
+
+	return err;
+}
+
 static __always_inline ssize_t __mcopy_atomic(struct mm_struct *dst_mm,
 					      unsigned long dst_start,
 					      unsigned long src_start,
@@ -404,29 +435,10 @@ retry:
 	 * Make sure the vma is not shared, that the dst range is
 	 * both valid and fully within a single existing vma.
 	 */
-	err = -EINVAL;
+	err = -ENOENT;
 	dst_vma = find_vma(dst_mm, dst_start);
 	if (!dst_vma)
 		goto out_unlock;
-	/*
-	 * shmem_zero_setup is invoked in mmap for MAP_ANONYMOUS|MAP_SHARED but
-	 * it will overwrite vm_ops, so vma_is_anonymous must return false.
-	 */
-	if (WARN_ON_ONCE(vma_is_anonymous(dst_vma) &&
-	    dst_vma->vm_flags & VM_SHARED))
-		goto out_unlock;
-
-	if (dst_start < dst_vma->vm_start ||
-	    dst_start + len > dst_vma->vm_end)
-		goto out_unlock;
-
-	/*
-	 * If this is a HUGETLB vma, pass off to appropriate routine
-	 */
-	if (is_vm_hugetlb_page(dst_vma))
-		return  __mcopy_atomic_hugetlb(dst_mm, dst_vma, dst_start,
-						src_start, len, zeropage);
-
 	/*
 	 * Be strict and only allow __mcopy_atomic on userfaultfd
 	 * registered ranges to prevent userland errors going
@@ -438,6 +450,26 @@ retry:
 	 */
 	if (!dst_vma->vm_userfaultfd_ctx.ctx)
 		goto out_unlock;
+
+	if (dst_start < dst_vma->vm_start ||
+	    dst_start + len > dst_vma->vm_end)
+		goto out_unlock;
+
+	err = -EINVAL;
+	/*
+	 * shmem_zero_setup is invoked in mmap for MAP_ANONYMOUS|MAP_SHARED but
+	 * it will overwrite vm_ops, so vma_is_anonymous must return false.
+	 */
+	if (WARN_ON_ONCE(vma_is_anonymous(dst_vma) &&
+	    dst_vma->vm_flags & VM_SHARED))
+		goto out_unlock;
+
+	/*
+	 * If this is a HUGETLB vma, pass off to appropriate routine
+	 */
+	if (is_vm_hugetlb_page(dst_vma))
+		return  __mcopy_atomic_hugetlb(dst_mm, dst_vma, dst_start,
+						src_start, len, zeropage);
 
 	if (!vma_is_anonymous(dst_vma) && !vma_is_shmem(dst_vma))
 		goto out_unlock;
@@ -485,22 +517,8 @@ retry:
 		BUG_ON(pmd_none(*dst_pmd));
 		BUG_ON(pmd_trans_huge(*dst_pmd));
 
-		if (vma_is_anonymous(dst_vma)) {
-			if (!zeropage)
-				err = mcopy_atomic_pte(dst_mm, dst_pmd, dst_vma,
-						       dst_addr, src_addr,
-						       &page);
-			else
-				err = mfill_zeropage_pte(dst_mm, dst_pmd,
-							 dst_vma, dst_addr);
-		} else {
-			err = -EINVAL; /* if zeropage is true return -EINVAL */
-			if (likely(!zeropage))
-				err = shmem_mcopy_atomic_pte(dst_mm, dst_pmd,
-							     dst_vma, dst_addr,
-							     src_addr, &page);
-		}
-
+		err = mfill_atomic_pte(dst_mm, dst_pmd, dst_vma, dst_addr,
+				       src_addr, &page, zeropage);
 		cond_resched();
 
 		if (unlikely(err == -EFAULT)) {

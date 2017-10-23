@@ -44,7 +44,7 @@ void exynos_sys_powerdown_conf(enum sys_powerdown mode)
 	unsigned int i;
 	const struct exynos_pmu_data *pmu_data;
 
-	if (!pmu_context)
+	if (!pmu_context || !pmu_context->pmu_data)
 		return;
 
 	pmu_data = pmu_context->pmu_data;
@@ -69,27 +69,39 @@ void exynos_sys_powerdown_conf(enum sys_powerdown mode)
 }
 
 /*
+ * Split the data between ARM architectures because it is relatively big
+ * and useless on other arch.
+ */
+#ifdef CONFIG_EXYNOS_PMU_ARM_DRIVERS
+#define exynos_pmu_data_arm_ptr(data)	(&data)
+#else
+#define exynos_pmu_data_arm_ptr(data)	NULL
+#endif
+
+/*
  * PMU platform driver and devicetree bindings.
  */
 static const struct of_device_id exynos_pmu_of_device_ids[] = {
 	{
 		.compatible = "samsung,exynos3250-pmu",
-		.data = &exynos3250_pmu_data,
+		.data = exynos_pmu_data_arm_ptr(exynos3250_pmu_data),
 	}, {
 		.compatible = "samsung,exynos4210-pmu",
-		.data = &exynos4210_pmu_data,
+		.data = exynos_pmu_data_arm_ptr(exynos4210_pmu_data),
 	}, {
 		.compatible = "samsung,exynos4212-pmu",
-		.data = &exynos4212_pmu_data,
+		.data = exynos_pmu_data_arm_ptr(exynos4212_pmu_data),
 	}, {
 		.compatible = "samsung,exynos4412-pmu",
-		.data = &exynos4412_pmu_data,
+		.data = exynos_pmu_data_arm_ptr(exynos4412_pmu_data),
 	}, {
 		.compatible = "samsung,exynos5250-pmu",
-		.data = &exynos5250_pmu_data,
+		.data = exynos_pmu_data_arm_ptr(exynos5250_pmu_data),
 	}, {
 		.compatible = "samsung,exynos5420-pmu",
-		.data = &exynos5420_pmu_data,
+		.data = exynos_pmu_data_arm_ptr(exynos5420_pmu_data),
+	}, {
+		.compatible = "samsung,exynos5433-pmu",
 	},
 	{ /*sentinel*/ },
 };
@@ -122,7 +134,7 @@ static int exynos_pmu_probe(struct platform_device *pdev)
 	pmu_context->dev = dev;
 	pmu_context->pmu_data = of_device_get_match_data(dev);
 
-	if (pmu_context->pmu_data->pmu_init)
+	if (pmu_context->pmu_data && pmu_context->pmu_data->pmu_init)
 		pmu_context->pmu_data->pmu_init();
 
 	platform_set_drvdata(pdev, pmu_context);

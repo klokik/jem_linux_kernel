@@ -19,7 +19,7 @@
 #include <asm/intel_scu_ipc.h>
 #include <asm/io_apic.h>
 
-#define TANGIER_EXT_TIMER0_MSI 15
+#define TANGIER_EXT_TIMER0_MSI 12
 
 static struct platform_device wdt_dev = {
 	.name = "intel_mid_wdt",
@@ -30,13 +30,13 @@ static int tangier_probe(struct platform_device *pdev)
 {
 	struct irq_alloc_info info;
 	struct intel_mid_wdt_pdata *pdata = pdev->dev.platform_data;
-	int gsi, irq;
+	int gsi = TANGIER_EXT_TIMER0_MSI;
+	int irq;
 
 	if (!pdata)
 		return -EINVAL;
 
 	/* IOAPIC builds identity mapping between GSI and IRQ on MID */
-	gsi = pdata->irq;
 	ioapic_set_alloc_attr(&info, cpu_to_node(0), 1, 0);
 	irq = mp_map_gsi_to_irq(gsi, IOAPIC_MAP_ALLOC, &info);
 	if (irq < 0) {
@@ -44,11 +44,11 @@ static int tangier_probe(struct platform_device *pdev)
 		return irq;
 	}
 
+	pdata->irq = irq;
 	return 0;
 }
 
 static struct intel_mid_wdt_pdata tangier_pdata = {
-	.irq = TANGIER_EXT_TIMER0_MSI,
 	.probe = tangier_probe,
 };
 

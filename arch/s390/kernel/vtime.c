@@ -6,7 +6,7 @@
  */
 
 #include <linux/kernel_stat.h>
-#include <linux/cputime.h>
+#include <linux/sched/cputime.h>
 #include <linux/export.h>
 #include <linux/kernel.h>
 #include <linux/timex.h>
@@ -110,11 +110,10 @@ static inline u64 scale_vtime(u64 vtime)
 	return vtime;
 }
 
-static void account_system_index_scaled(struct task_struct *p,
-					cputime_t cputime, cputime_t scaled,
+static void account_system_index_scaled(struct task_struct *p, u64 cputime,
 					enum cpu_usage_stat index)
 {
-	p->stimescaled += cputime_to_nsecs(scaled);
+	p->stimescaled += cputime_to_nsecs(scale_vtime(cputime));
 	account_system_index_time(p, cputime_to_nsecs(cputime), index);
 }
 
@@ -176,14 +175,11 @@ static int do_account_vtime(struct task_struct *tsk)
 	}
 
 	if (system)
-		account_system_index_scaled(tsk, system, scale_vtime(system),
-					    CPUTIME_SYSTEM);
+		account_system_index_scaled(tsk, system, CPUTIME_SYSTEM);
 	if (hardirq)
-		account_system_index_scaled(tsk, hardirq, scale_vtime(hardirq),
-					    CPUTIME_IRQ);
+		account_system_index_scaled(tsk, hardirq, CPUTIME_IRQ);
 	if (softirq)
-		account_system_index_scaled(tsk, softirq, scale_vtime(softirq),
-					    CPUTIME_SOFTIRQ);
+		account_system_index_scaled(tsk, softirq, CPUTIME_SOFTIRQ);
 
 	steal = S390_lowcore.steal_timer;
 	if ((s64) steal > 0) {
@@ -350,7 +346,7 @@ static void __add_vtimer(struct vtimer_list *timer, int periodic)
 }
 
 /*
- * add_virt_timer - add an oneshot virtual CPU timer
+ * add_virt_timer - add a oneshot virtual CPU timer
  */
 void add_virt_timer(struct vtimer_list *timer)
 {

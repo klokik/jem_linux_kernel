@@ -19,8 +19,10 @@
  */
 #include <linux/mutex.h>
 #include <linux/ww_mutex.h>
-#include <linux/sched.h>
+#include <linux/sched/signal.h>
 #include <linux/sched/rt.h>
+#include <linux/sched/wake_q.h>
+#include <linux/sched/debug.h>
 #include <linux/export.h>
 #include <linux/spinlock.h>
 #include <linux/interrupt.h>
@@ -225,9 +227,9 @@ static void __sched __mutex_lock_slowpath(struct mutex *lock);
  * (or statically defined) before it can be locked. memset()-ing
  * the mutex to 0 is not allowed.
  *
- * ( The CONFIG_DEBUG_MUTEXES .config option turns on debugging
- *   checks that will enforce the restrictions and will also do
- *   deadlock debugging. )
+ * (The CONFIG_DEBUG_MUTEXES .config option turns on debugging
+ * checks that will enforce the restrictions and will also do
+ * deadlock debugging)
  *
  * This function is similar to (but not equivalent to) down().
  */

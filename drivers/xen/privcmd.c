@@ -362,8 +362,8 @@ static int mmap_batch_fn(void *data, int nr, void *state)
 				st->global_error = 1;
 		}
 	}
-	st->va += PAGE_SIZE * nr;
-	st->index += nr;
+	st->va += XEN_PAGE_SIZE * nr;
+	st->index += nr / XEN_PFN_PER_PAGE;
 
 	return 0;
 }
@@ -804,10 +804,10 @@ static void privcmd_close(struct vm_area_struct *vma)
 	kfree(pages);
 }
 
-static int privcmd_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
+static int privcmd_fault(struct vm_fault *vmf)
 {
 	printk(KERN_DEBUG "privcmd_fault: vma=%p %lx-%lx, pgoff=%lx, uv=%p\n",
-	       vma, vma->vm_start, vma->vm_end,
+	       vmf->vma, vmf->vma->vm_start, vmf->vma->vm_end,
 	       vmf->pgoff, (void *)vmf->address);
 
 	return VM_FAULT_SIGBUS;

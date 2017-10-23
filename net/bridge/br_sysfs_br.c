@@ -19,6 +19,7 @@
 #include <linux/rtnetlink.h>
 #include <linux/spinlock.h>
 #include <linux/times.h>
+#include <linux/sched/signal.h>
 
 #include "br_private.h"
 
@@ -864,7 +865,7 @@ static struct attribute *bridge_attrs[] = {
 	NULL
 };
 
-static struct attribute_group bridge_group = {
+static const struct attribute_group bridge_group = {
 	.name = SYSFS_BRIDGE_ATTR,
 	.attrs = bridge_attrs,
 };

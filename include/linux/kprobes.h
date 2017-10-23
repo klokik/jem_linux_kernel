@@ -29,7 +29,7 @@
  *		<jkenisto@us.ibm.com>  and Prasanna S Panchamukhi
  *		<prasanna@in.ibm.com> added function-return probes.
  */
-#include <linux/compiler.h>	/* for __kprobes */
+#include <linux/compiler.h>
 #include <linux/linkage.h>
 #include <linux/list.h>
 #include <linux/notifier.h>
@@ -40,9 +40,9 @@
 #include <linux/rcupdate.h>
 #include <linux/mutex.h>
 #include <linux/ftrace.h>
+#include <asm/kprobes.h>
 
 #ifdef CONFIG_KPROBES
-#include <asm/kprobes.h>
 
 /* kprobe_status settings */
 #define KPROBE_HIT_ACTIVE	0x00000001
@@ -51,6 +51,7 @@
 #define KPROBE_HIT_SSDONE	0x00000008
 
 #else /* CONFIG_KPROBES */
+#include <asm-generic/kprobes.h>
 typedef int kprobe_opcode_t;
 struct arch_specific_insn {
 	int dummy;
@@ -266,6 +267,8 @@ extern int arch_init_kprobes(void);
 extern void show_registers(struct pt_regs *regs);
 extern void kprobes_inc_nmissed_count(struct kprobe *p);
 extern bool arch_within_kprobe_blacklist(unsigned long addr);
+extern bool arch_kprobe_on_func_entry(unsigned long offset);
+extern bool kprobe_on_func_entry(kprobe_opcode_t *addr, const char *sym, unsigned long offset);
 
 extern bool within_kprobe_blacklist(unsigned long addr);
 
@@ -346,6 +349,9 @@ extern int proc_kprobes_optimization_handler(struct ctl_table *table,
 					     int write, void __user *buffer,
 					     size_t *length, loff_t *ppos);
 #endif
+extern void wait_for_kprobe_optimizer(void);
+#else
+static inline void wait_for_kprobe_optimizer(void) { }
 #endif /* CONFIG_OPTPROBES */
 #ifdef CONFIG_KPROBES_ON_FTRACE
 extern void kprobe_ftrace_handler(unsigned long ip, unsigned long parent_ip,
@@ -378,6 +384,7 @@ static inline struct kprobe_ctlblk *get_kprobe_ctlblk(void)
 	return this_cpu_ptr(&kprobe_ctlblk);
 }
 
+kprobe_opcode_t *kprobe_lookup_name(const char *name, unsigned int offset);
 int register_kprobe(struct kprobe *p);
 void unregister_kprobe(struct kprobe *p);
 int register_kprobes(struct kprobe **kps, int num);
@@ -507,20 +514,6 @@ static inline bool is_kprobe_optinsn_slot(unsigned long addr)
 {
 	return false;
 }
-#endif
-
-#ifdef CONFIG_KPROBES
-/*
- * Blacklist ganerating macro. Specify functions which is not probed
- * by using this macro.
- */
-#define __NOKPROBE_SYMBOL(fname)			\
-static unsigned long __used				\
-	__attribute__((section("_kprobe_blacklist")))	\
-	_kbl_addr_##fname = (unsigned long)fname;
-#define NOKPROBE_SYMBOL(fname)	__NOKPROBE_SYMBOL(fname)
-#else
-#define NOKPROBE_SYMBOL(fname)
 #endif
 
 #endif /* _LINUX_KPROBES_H */

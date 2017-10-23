@@ -24,7 +24,7 @@ nfsd4_block_proc_layoutget(struct inode *inode, const struct svc_fh *fhp,
 {
 	struct nfsd4_layout_seg *seg = &args->lg_seg;
 	struct super_block *sb = inode->i_sb;
-	u32 block_size = (1 << inode->i_blkbits);
+	u32 block_size = i_blocksize(inode);
 	struct pnfs_block_extent *bex;
 	struct iomap iomap;
 	u32 device_generation = 0;
@@ -181,7 +181,7 @@ nfsd4_block_proc_layoutcommit(struct inode *inode,
 	int nr_iomaps;
 
 	nr_iomaps = nfsd4_block_decode_layoutupdate(lcp->lc_up_layout,
-			lcp->lc_up_len, &iomaps, 1 << inode->i_blkbits);
+			lcp->lc_up_len, &iomaps, i_blocksize(inode));
 	if (nr_iomaps < 0)
 		return nfserrno(nr_iomaps);
 
@@ -219,6 +219,9 @@ static int nfsd4_scsi_identify_device(struct block_device *bdev,
 	u8 *buf, *d, type, assoc;
 	int error;
 
+	if (WARN_ON_ONCE(!blk_queue_scsi_passthrough(q)))
+		return -EINVAL;
+
 	buf = kzalloc(bufflen, GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
@@ -229,7 +232,6 @@ static int nfsd4_scsi_identify_device(struct block_device *bdev,
 		goto out_free_buf;
 	}
 	req = scsi_req(rq);
-	scsi_req_init(rq);
 
 	error = blk_rq_map_kern(q, rq, buf, bufflen, GFP_KERNEL);
 	if (error)
@@ -242,10 +244,11 @@ static int nfsd4_scsi_identify_device(struct block_device *bdev,
 	req->cmd[4] = bufflen & 0xff;
 	req->cmd_len = COMMAND_SIZE(INQUIRY);
 
-	error = blk_execute_rq(rq->q, NULL, rq, 1);
-	if (error) {
+	blk_execute_rq(rq->q, NULL, rq, 1);
+	if (req->result) {
 		pr_err("pNFS: INQUIRY 0x83 failed with: %x\n",
-			rq->errors);
+			req->result);
+		error = -EIO;
 		goto out_put_request;
 	}
 
@@ -375,7 +378,7 @@ nfsd4_scsi_proc_layoutcommit(struct inode *inode,
 	int nr_iomaps;
 
 	nr_iomaps = nfsd4_scsi_decode_layoutupdate(lcp->lc_up_layout,
-			lcp->lc_up_len, &iomaps, 1 << inode->i_blkbits);
+			lcp->lc_up_len, &iomaps, i_blocksize(inode));
 	if (nr_iomaps < 0)
 		return nfserrno(nr_iomaps);
 

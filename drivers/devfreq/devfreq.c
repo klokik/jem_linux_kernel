@@ -564,7 +564,7 @@ struct devfreq *devfreq_add_device(struct device *dev,
 	err = device_register(&devfreq->dev);
 	if (err) {
 		mutex_unlock(&devfreq->lock);
-		goto err_out;
+		goto err_dev;
 	}
 
 	devfreq->trans_table =	devm_kzalloc(&devfreq->dev,
@@ -610,6 +610,9 @@ err_init:
 	mutex_unlock(&devfreq_list_lock);
 
 	device_unregister(&devfreq->dev);
+err_dev:
+	if (devfreq)
+		kfree(devfreq);
 err_out:
 	return ERR_PTR(err);
 }
@@ -1228,7 +1231,7 @@ static int __init devfreq_init(void)
 subsys_initcall(devfreq_init);
 
 /*
- * The followings are helper functions for devfreq user device drivers with
+ * The following are helper functions for devfreq user device drivers with
  * OPP framework.
  */
 

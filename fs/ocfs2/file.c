@@ -196,7 +196,7 @@ static int ocfs2_sync_file(struct file *file, loff_t start, loff_t end,
 	if (ocfs2_is_hard_readonly(osb) || ocfs2_is_soft_readonly(osb))
 		return -EROFS;
 
-	err = filemap_write_and_wait_range(inode->i_mapping, start, end);
+	err = file_write_and_wait_range(file, start, end);
 	if (err)
 		return err;
 
@@ -713,13 +713,6 @@ leave:
 	return status;
 }
 
-int ocfs2_extend_allocation(struct inode *inode, u32 logical_start,
-		u32 clusters_to_add, int mark_unwritten)
-{
-	return __ocfs2_extend_allocation(inode, logical_start,
-			clusters_to_add, mark_unwritten);
-}
-
 /*
  * While a write will already be ordering the data, a truncate will not.
  * Thus, we need to explicitly order the zeroed pages.
@@ -808,7 +801,7 @@ static int ocfs2_write_zero_page(struct inode *inode, u64 abs_from,
 	/* We know that zero_from is block aligned */
 	for (block_start = zero_from; block_start < zero_to;
 	     block_start = block_end) {
-		block_end = block_start + (1 << inode->i_blkbits);
+		block_end = block_start + i_blocksize(inode);
 
 		/*
 		 * block_start is block-aligned.  Bump it by one to force
@@ -1306,16 +1299,15 @@ bail:
 	return status;
 }
 
-int ocfs2_getattr(struct vfsmount *mnt,
-		  struct dentry *dentry,
-		  struct kstat *stat)
+int ocfs2_getattr(const struct path *path, struct kstat *stat,
+		  u32 request_mask, unsigned int flags)
 {
-	struct inode *inode = d_inode(dentry);
-	struct super_block *sb = dentry->d_sb;
+	struct inode *inode = d_inode(path->dentry);
+	struct super_block *sb = path->dentry->d_sb;
 	struct ocfs2_super *osb = sb->s_fs_info;
 	int err;
 
-	err = ocfs2_inode_revalidate(dentry);
+	err = ocfs2_inode_revalidate(path->dentry);
 	if (err) {
 		if (err != -ENOENT)
 			mlog_errno(err);

@@ -85,6 +85,7 @@ int aq_pci_func_init(struct aq_pci_func_s *self)
 	int err = 0;
 	unsigned int bar = 0U;
 	unsigned int port = 0U;
+	unsigned int numvecs = 0U;
 
 	err = pci_enable_device(self->pdev);
 	if (err < 0)
@@ -142,10 +143,12 @@ int aq_pci_func_init(struct aq_pci_func_s *self)
 		}
 	}
 
-	/*enable interrupts */
+	numvecs = min((u8)AQ_CFG_VECS_DEF, self->aq_hw_caps.msix_irqs);
+	numvecs = min(numvecs, num_online_cpus());
+
+	/* enable interrupts */
 #if !AQ_CFG_FORCE_LEGACY_INT
-	err = pci_alloc_irq_vectors(self->pdev, self->aq_hw_caps.msix_irqs,
-			      self->aq_hw_caps.msix_irqs, PCI_IRQ_MSIX);
+	err = pci_alloc_irq_vectors(self->pdev, numvecs, numvecs, PCI_IRQ_MSIX);
 
 	if (err < 0) {
 		err = pci_alloc_irq_vectors(self->pdev, 1, 1,
@@ -153,7 +156,7 @@ int aq_pci_func_init(struct aq_pci_func_s *self)
 		if (err < 0)
 			goto err_exit;
 	}
-#endif
+#endif /* AQ_CFG_FORCE_LEGACY_INT */
 
 	/* net device init */
 	for (port = 0; port < self->ports; ++port) {
@@ -213,9 +216,9 @@ void aq_pci_func_free_irqs(struct aq_pci_func_s *self)
 		if (!((1U << i) & self->msix_entry_mask))
 			continue;
 
-		free_irq(pci_irq_vector(pdev, i), self->aq_vec[i]);
 		if (pdev->msix_enabled)
 			irq_set_affinity_hint(pci_irq_vector(pdev, i), NULL);
+		free_irq(pci_irq_vector(pdev, i), self->aq_vec[i]);
 		self->msix_entry_mask &= ~(1U << i);
 	}
 }
@@ -264,6 +267,9 @@ void aq_pci_func_free(struct aq_pci_func_s *self)
 
 		aq_nic_ndev_free(self->port[port]);
 	}
+
+	if (self->mmio)
+		iounmap(self->mmio);
 
 	kfree(self);
 

@@ -56,6 +56,8 @@
 #include <linux/syscalls.h>
 #include <linux/mount.h>
 #include <linux/uaccess.h>
+#include <linux/sched/cputime.h>
+
 #include <asm/div64.h>
 #include <linux/blkdev.h> /* sector_div */
 #include <linux/pid_namespace.h>
@@ -514,7 +516,7 @@ static void do_acct_process(struct bsd_acct_struct *acct)
 	if (file_start_write_trylock(file)) {
 		/* it's been opened O_APPEND, so position is irrelevant */
 		loff_t pos = 0;
-		__kernel_write(file, (char *)&ac, sizeof(acct_t), &pos);
+		__kernel_write(file, &ac, sizeof(acct_t), &pos);
 		file_end_write(file);
 	}
 out:

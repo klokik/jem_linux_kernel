@@ -19,6 +19,7 @@
 #include <linux/init.h>
 #include <linux/log2.h>
 #include <linux/sched.h>
+#include <linux/rculist.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <linux/mm.h>
@@ -85,16 +86,9 @@ static int alloc_bucket_locks(struct rhashtable *ht, struct bucket_table *tbl,
 		size = min(size, 1U << tbl->nest);
 
 	if (sizeof(spinlock_t) != 0) {
-		tbl->locks = NULL;
-#ifdef CONFIG_NUMA
-		if (size * sizeof(spinlock_t) > PAGE_SIZE &&
-		    gfp == GFP_KERNEL)
-			tbl->locks = vmalloc(size * sizeof(spinlock_t));
-#endif
-		if (gfp != GFP_KERNEL)
-			gfp |= __GFP_NOWARN | __GFP_NORETRY;
-
-		if (!tbl->locks)
+		if (gfpflags_allow_blocking(gfp))
+			tbl->locks = kvmalloc(size * sizeof(spinlock_t), gfp);
+		else
 			tbl->locks = kmalloc_array(size, sizeof(spinlock_t),
 						   gfp);
 		if (!tbl->locks)
@@ -146,9 +140,7 @@ static void bucket_table_free(const struct bucket_table *tbl)
 	if (tbl->nest)
 		nested_bucket_table_free(tbl);
 
-	if (tbl)
-		kvfree(tbl->locks);
-
+	kvfree(tbl->locks);
 	kvfree(tbl);
 }
 
@@ -219,11 +211,10 @@ static struct bucket_table *bucket_table_alloc(struct rhashtable *ht,
 	int i;
 
 	size = sizeof(*tbl) + nbuckets * sizeof(tbl->buckets[0]);
-	if (size <= (PAGE_SIZE << PAGE_ALLOC_COSTLY_ORDER) ||
-	    gfp != GFP_KERNEL)
+	if (gfp != GFP_KERNEL)
 		tbl = kzalloc(size, gfp | __GFP_NOWARN | __GFP_NORETRY);
-	if (tbl == NULL && gfp == GFP_KERNEL)
-		tbl = vzalloc(size);
+	else
+		tbl = kvzalloc(size, gfp);
 
 	size = nbuckets;
 
@@ -243,7 +234,7 @@ static struct bucket_table *bucket_table_alloc(struct rhashtable *ht,
 
 	INIT_LIST_HEAD(&tbl->walkers);
 
-	get_random_bytes(&tbl->hash_rnd, sizeof(tbl->hash_rnd));
+	tbl->hash_rnd = get_random_u32();
 
 	for (i = 0; i < nbuckets; i++)
 		INIT_RHT_NULLS_HEAD(tbl->buckets[i], ht, i);
@@ -536,7 +527,7 @@ static void *rhashtable_lookup_one(struct rhashtable *ht,
 	struct rhash_head *head;
 	int elasticity;
 
-	elasticity = ht->elasticity;
+	elasticity = RHT_ELASTICITY;
 	pprev = rht_bucket_var(tbl, hash);
 	rht_for_each_continue(head, *pprev, tbl, hash) {
 		struct rhlist_head *list;
@@ -744,9 +735,9 @@ EXPORT_SYMBOL_GPL(rhashtable_walk_exit);
  * rhashtable_walk_start - Start a hash table walk
  * @iter:	Hash table iterator
  *
- * Start a hash table walk.  Note that we take the RCU lock in all
- * cases including when we return an error.  So you must always call
- * rhashtable_walk_stop to clean up.
+ * Start a hash table walk at the current iterator position.  Note that we take
+ * the RCU lock in all cases including when we return an error.  So you must
+ * always call rhashtable_walk_stop to clean up.
  *
  * Returns zero if successful.
  *
@@ -855,7 +846,8 @@ EXPORT_SYMBOL_GPL(rhashtable_walk_next);
  * rhashtable_walk_stop - Finish a hash table walk
  * @iter:	Hash table iterator
  *
- * Finish a hash table walk.
+ * Finish a hash table walk.  Does not reset the iterator to the start of the
+ * hash table.
  */
 void rhashtable_walk_stop(struct rhashtable_iter *iter)
 	__releases(RCU)
@@ -959,34 +951,19 @@ int rhashtable_init(struct rhashtable *ht,
 	if (params->min_size)
 		ht->p.min_size = roundup_pow_of_two(params->min_size);
 
-	if (params->max_size)
+	/* Cap total entries at 2^31 to avoid nelems overflow. */
+	ht->max_elems = 1u << 31;
+
+	if (params->max_size) {
 		ht->p.max_size = rounddown_pow_of_two(params->max_size);
+		if (ht->p.max_size < ht->max_elems / 2)
+			ht->max_elems = ht->p.max_size * 2;
+	}
 
-	if (params->insecure_max_entries)
-		ht->p.insecure_max_entries =
-			rounddown_pow_of_two(params->insecure_max_entries);
-	else
-		ht->p.insecure_max_entries = ht->p.max_size * 2;
-
-	ht->p.min_size = max(ht->p.min_size, HASH_MIN_SIZE);
+	ht->p.min_size = max_t(u16, ht->p.min_size, HASH_MIN_SIZE);
 
 	if (params->nelem_hint)
 		size = rounded_hashtable_size(&ht->p);
-
-	/* The maximum (not average) chain length grows with the
-	 * size of the hash table, at a rate of (log N)/(log log N).
-	 * The value of 16 is selected so that even if the hash
-	 * table grew to 2^32 you would not expect the maximum
-	 * chain length to exceed it unless we are under attack
-	 * (or extremely unlucky).
-	 *
-	 * As this limit is only to detect attacks, we don't need
-	 * to set it to a lower value as you'd need the chain
-	 * length to vastly exceed 16 to have any real effect
-	 * on the system.
-	 */
-	if (!params->insecure_elasticity)
-		ht->elasticity = 16;
 
 	if (params->locks_mul)
 		ht->p.locks_mul = roundup_pow_of_two(params->locks_mul);
@@ -1123,12 +1100,13 @@ struct rhash_head __rcu **rht_bucket_nested(const struct bucket_table *tbl,
 	union nested_table *ntbl;
 
 	ntbl = (union nested_table *)rcu_dereference_raw(tbl->buckets[0]);
-	ntbl = rht_dereference_bucket(ntbl[index].table, tbl, hash);
+	ntbl = rht_dereference_bucket_rcu(ntbl[index].table, tbl, hash);
 	subhash >>= tbl->nest;
 
 	while (ntbl && size > (1 << shift)) {
 		index = subhash & ((1 << shift) - 1);
-		ntbl = rht_dereference_bucket(ntbl[index].table, tbl, hash);
+		ntbl = rht_dereference_bucket_rcu(ntbl[index].table,
+						  tbl, hash);
 		size >>= shift;
 		subhash >>= shift;
 	}

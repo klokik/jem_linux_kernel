@@ -119,6 +119,7 @@ struct efx_ef10_filter_table {
 	bool mc_promisc;
 /* Whether in multicast promiscuous mode when last changed */
 	bool mc_promisc_last;
+	bool mc_overflow; /* Too many MC addrs; should always imply mc_promisc */
 	bool vlan_filter;
 	struct list_head vlan_list;
 };
@@ -828,9 +829,7 @@ static int efx_ef10_alloc_piobufs(struct efx_nic *efx, unsigned int n)
 static int efx_ef10_link_piobufs(struct efx_nic *efx)
 {
 	struct efx_ef10_nic_data *nic_data = efx->nic_data;
-	_MCDI_DECLARE_BUF(inbuf,
-			  max(MC_CMD_LINK_PIOBUF_IN_LEN,
-			      MC_CMD_UNLINK_PIOBUF_IN_LEN));
+	MCDI_DECLARE_BUF(inbuf, MC_CMD_LINK_PIOBUF_IN_LEN);
 	struct efx_channel *channel;
 	struct efx_tx_queue *tx_queue;
 	unsigned int offset, index;
@@ -838,8 +837,6 @@ static int efx_ef10_link_piobufs(struct efx_nic *efx)
 
 	BUILD_BUG_ON(MC_CMD_LINK_PIOBUF_OUT_LEN != 0);
 	BUILD_BUG_ON(MC_CMD_UNLINK_PIOBUF_OUT_LEN != 0);
-
-	memset(inbuf, 0, sizeof(inbuf));
 
 	/* Link a buffer to each VI in the write-combining mapping */
 	for (index = 0; index < nic_data->n_piobufs; ++index) {
@@ -920,6 +917,10 @@ static int efx_ef10_link_piobufs(struct efx_nic *efx)
 	return 0;
 
 fail:
+	/* inbuf was defined for MC_CMD_LINK_PIOBUF.  We can use the same
+	 * buffer for MC_CMD_UNLINK_PIOBUF because it's shorter.
+	 */
+	BUILD_BUG_ON(MC_CMD_LINK_PIOBUF_IN_LEN < MC_CMD_UNLINK_PIOBUF_IN_LEN);
 	while (index--) {
 		MCDI_SET_DWORD(inbuf, UNLINK_PIOBUF_IN_TXQ_INSTANCE,
 			       nic_data->pio_write_vi_base + index);
@@ -2183,7 +2184,7 @@ static int efx_ef10_tx_tso_desc(struct efx_tx_queue *tx_queue,
 		/* Modify IPv4 header if needed. */
 		ip->tot_len = 0;
 		ip->check = 0;
-		ipv4_id = ip->id;
+		ipv4_id = ntohs(ip->id);
 	} else {
 		/* Modify IPv6 header if needed. */
 		struct ipv6hdr *ipv6 = ipv6_hdr(skb);
@@ -4171,7 +4172,7 @@ found:
 	 * recipients
 	 */
 	if (is_mc_recip) {
-		MCDI_DECLARE_BUF(inbuf, MC_CMD_FILTER_OP_IN_LEN);
+		MCDI_DECLARE_BUF(inbuf, MC_CMD_FILTER_OP_EXT_IN_LEN);
 		unsigned int depth, i;
 
 		memset(inbuf, 0, sizeof(inbuf));
@@ -4319,7 +4320,7 @@ static int efx_ef10_filter_remove_internal(struct efx_nic *efx,
 			efx_ef10_filter_set_entry(table, filter_idx, NULL, 0);
 		} else {
 			efx_mcdi_display_error(efx, MC_CMD_FILTER_OP,
-					       MC_CMD_FILTER_OP_IN_LEN,
+					       MC_CMD_FILTER_OP_EXT_IN_LEN,
 					       NULL, 0, rc);
 		}
 	}
@@ -4452,7 +4453,7 @@ static s32 efx_ef10_filter_rfs_insert(struct efx_nic *efx,
 				      struct efx_filter_spec *spec)
 {
 	struct efx_ef10_filter_table *table = efx->filter_state;
-	MCDI_DECLARE_BUF(inbuf, MC_CMD_FILTER_OP_IN_LEN);
+	MCDI_DECLARE_BUF(inbuf, MC_CMD_FILTER_OP_EXT_IN_LEN);
 	struct efx_filter_spec *saved_spec;
 	unsigned int hash, i, depth = 1;
 	bool replacing = false;
@@ -4939,7 +4940,7 @@ not_restored:
 static void efx_ef10_filter_table_remove(struct efx_nic *efx)
 {
 	struct efx_ef10_filter_table *table = efx->filter_state;
-	MCDI_DECLARE_BUF(inbuf, MC_CMD_FILTER_OP_IN_LEN);
+	MCDI_DECLARE_BUF(inbuf, MC_CMD_FILTER_OP_EXT_IN_LEN);
 	struct efx_filter_spec *spec;
 	unsigned int filter_idx;
 	int rc;
@@ -5033,12 +5034,9 @@ static void efx_ef10_filter_uc_addr_list(struct efx_nic *efx)
 	struct efx_ef10_filter_table *table = efx->filter_state;
 	struct net_device *net_dev = efx->net_dev;
 	struct netdev_hw_addr *uc;
-	int addr_count;
 	unsigned int i;
 
-	addr_count = netdev_uc_count(net_dev);
 	table->uc_promisc = !!(net_dev->flags & IFF_PROMISC);
-	table->dev_uc_count = 1 + addr_count;
 	ether_addr_copy(table->dev_uc_list[0].addr, net_dev->dev_addr);
 	i = 1;
 	netdev_for_each_uc_addr(uc, net_dev) {
@@ -5049,6 +5047,8 @@ static void efx_ef10_filter_uc_addr_list(struct efx_nic *efx)
 		ether_addr_copy(table->dev_uc_list[i].addr, uc->addr);
 		i++;
 	}
+
+	table->dev_uc_count = i;
 }
 
 static void efx_ef10_filter_mc_addr_list(struct efx_nic *efx)
@@ -5056,15 +5056,16 @@ static void efx_ef10_filter_mc_addr_list(struct efx_nic *efx)
 	struct efx_ef10_filter_table *table = efx->filter_state;
 	struct net_device *net_dev = efx->net_dev;
 	struct netdev_hw_addr *mc;
-	unsigned int i, addr_count;
+	unsigned int i;
 
+	table->mc_overflow = false;
 	table->mc_promisc = !!(net_dev->flags & (IFF_PROMISC | IFF_ALLMULTI));
 
-	addr_count = netdev_mc_count(net_dev);
 	i = 0;
 	netdev_for_each_mc_addr(mc, net_dev) {
 		if (i >= EFX_EF10_FILTER_DEV_MC_MAX) {
 			table->mc_promisc = true;
+			table->mc_overflow = true;
 			break;
 		}
 		ether_addr_copy(table->dev_mc_list[i].addr, mc->addr);
@@ -5102,6 +5103,7 @@ static int efx_ef10_filter_insert_addr_list(struct efx_nic *efx,
 
 	/* Insert/renew filters */
 	for (i = 0; i < addr_count; i++) {
+		EFX_WARN_ON_PARANOID(ids[i] != EFX_EF10_FILTER_ID_INVALID);
 		efx_filter_init_rx(&spec, EFX_FILTER_PRI_AUTO, filter_flags, 0);
 		efx_filter_set_eth_local(&spec, vlan->vid, addr_list[i].addr);
 		rc = efx_ef10_filter_insert(efx, &spec, true);
@@ -5119,11 +5121,11 @@ static int efx_ef10_filter_insert_addr_list(struct efx_nic *efx,
 				}
 				return rc;
 			} else {
-				/* mark as not inserted, and carry on */
-				rc = EFX_EF10_FILTER_ID_INVALID;
+				/* keep invalid ID, and carry on */
 			}
+		} else {
+			ids[i] = efx_ef10_filter_get_unsafe_id(rc);
 		}
-		ids[i] = efx_ef10_filter_get_unsafe_id(rc);
 	}
 
 	if (multicast && rollback) {
@@ -5469,12 +5471,15 @@ static void efx_ef10_filter_vlan_sync_rx_mode(struct efx_nic *efx,
 			}
 		} else {
 			/* If we failed to insert promiscuous filters, don't
-			 * rollback.  Regardless, also insert the mc_list
+			 * rollback.  Regardless, also insert the mc_list,
+			 * unless it's incomplete due to overflow
 			 */
 			efx_ef10_filter_insert_def(efx, vlan,
 						   EFX_ENCAP_TYPE_NONE,
 						   true, false);
-			efx_ef10_filter_insert_addr_list(efx, vlan, true, false);
+			if (!table->mc_overflow)
+				efx_ef10_filter_insert_addr_list(efx, vlan,
+								 true, false);
 		}
 	} else {
 		/* If any filters failed to insert, rollback and fall back to
@@ -6062,6 +6067,7 @@ static int efx_ef10_ptp_set_ts_config(struct efx_nic *efx,
 	case HWTSTAMP_FILTER_PTP_V2_EVENT:
 	case HWTSTAMP_FILTER_PTP_V2_SYNC:
 	case HWTSTAMP_FILTER_PTP_V2_DELAY_REQ:
+	case HWTSTAMP_FILTER_NTP_ALL:
 		init->rx_filter = HWTSTAMP_FILTER_ALL;
 		rc = efx_ptp_change_mode(efx, true, 0);
 		if (!rc)

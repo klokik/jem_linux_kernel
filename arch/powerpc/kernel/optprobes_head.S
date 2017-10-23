@@ -60,10 +60,13 @@ optprobe_template_entry:
 	std	r5,_CCR(r1)
 	lbz     r5,PACASOFTIRQEN(r13)
 	std     r5,SOFTE(r1)
-	mfdar	r5
-	std	r5,_DAR(r1)
-	mfdsisr	r5
-	std	r5,_DSISR(r1)
+
+	/*
+	 * We may get here from a module, so load the kernel TOC in r2.
+	 * The original TOC gets restored when pt_regs is restored
+	 * further below.
+	 */
+	ld	r2,PACATOC(r13)
 
 	.global optprobe_template_op_address
 optprobe_template_op_address:
@@ -115,10 +118,6 @@ optprobe_template_call_emulate:
 	mtxer	r5
 	ld	r5,_CCR(r1)
 	mtcr	r5
-	ld	r5,_DAR(r1)
-	mtdar	r5
-	ld	r5,_DSISR(r1)
-	mtdsisr	r5
 	REST_GPR(0,r1)
 	REST_10GPRS(2,r1)
 	REST_10GPRS(12,r1)

@@ -32,6 +32,7 @@
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/slab.h>
+#include <linux/sched/signal.h>
 #include <linux/module.h>
 #include <linux/kref.h>
 #include <linux/netdevice.h>
@@ -384,7 +385,7 @@ _next:
 			if (blnPending)
 				wr_sz += 8;   /* Append 8 bytes */
 			r8712_write_mem(padapter, RTL8712_DMA_H2CCMD, wr_sz,
-				       (u8 *)pdesc);
+					(u8 *)pdesc);
 			pcmdpriv->cmd_seq++;
 			if (pcmd->cmdcode == GEN_CMD_CODE(_CreateBss)) {
 				pcmd->res = H2C_SUCCESS;
