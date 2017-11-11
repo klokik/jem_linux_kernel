@@ -475,7 +475,7 @@ static struct omap_dss_driver pdsivm_ops = {
 	.check_timings	= pdsivm_check_timings,
 
 //	.get_resolution	= pdsivm_get_resolution,
-	.get_resolution	= omapdss_default_get_resolution,
+	// .get_resolution	= omapdss_default_get_resolution,
 };
 
 /* static void pdsivm_hw_reset(struct omap_dss_device *dssdev)
