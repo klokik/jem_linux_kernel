@@ -21,6 +21,9 @@
  *
  */
 
+#define DEBUG 1
+#define VERBOSE_DEBUG 1
+
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/skbuff.h>
@@ -61,6 +64,7 @@ struct bcm_device {
 	const char		*name;
 	struct gpio_desc	*device_wakeup;
 	struct gpio_desc	*shutdown;
+	struct gpio_desc	*reset;
 
 	struct clk		*clk;
 	bool			clk_enabled;
@@ -170,8 +174,11 @@ static int bcm_gpio_set_power(struct bcm_device *dev, bool powered)
 	if (powered && !IS_ERR(dev->clk) && !dev->clk_enabled)
 		clk_prepare_enable(dev->clk);
 
+	bt_dev_dbg(dev, "Set power: %d", powered);
+
 	gpiod_set_value(dev->shutdown, powered);
 	gpiod_set_value(dev->device_wakeup, powered);
+	gpiod_set_value(dev->reset, powered);
 
 	if (!powered && !IS_ERR(dev->clk) && dev->clk_enabled)
 		clk_disable_unprepare(dev->clk);
@@ -337,6 +344,7 @@ static int bcm_open(struct hci_uart *hu)
 #ifdef CONFIG_PM
 			dev->hu = hu;
 #endif
+			bt_dev_dbg(hu->hdev, "Powering on");
 			bcm_gpio_set_power(bcm->dev, true);
 			break;
 		}
@@ -778,6 +786,12 @@ static int bcm_platform_probe(struct bcm_device *dev)
 	if (IS_ERR(dev->shutdown))
 		return PTR_ERR(dev->shutdown);
 
+	dev->reset = devm_gpiod_get_optional(&pdev->dev, "reset",
+						GPIOD_OUT_LOW);
+	if (IS_ERR(dev->reset))
+		return PTR_ERR(dev->reset);
+
+
 	/* IRQ can be declared in ACPI table as Interrupt or GpioInt */
 	dev->irq = platform_get_irq(pdev, 0);
 	if (dev->irq <= 0) {
@@ -979,6 +993,7 @@ static void bcm_serdev_remove(struct serdev_device *serdev)
 #ifdef CONFIG_OF
 static const struct of_device_id bcm_bluetooth_of_match[] = {
 	{ .compatible = "brcm,bcm43438-bt" },
+	{ .compatible = "brcm,bcm2076-bt" },
 	{ },
 };
 MODULE_DEVICE_TABLE(of, bcm_bluetooth_of_match);

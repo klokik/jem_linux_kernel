@@ -21,6 +21,9 @@
  *
  */
 
+#define DEBUG 1
+#define VERBOSE_DEBUG 1
+
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/serdev.h>
@@ -280,6 +283,7 @@ int hci_uart_register_device(struct hci_uart *hu,
 	struct hci_dev *hdev;
 
 	BT_DBG("");
+	BT_DBG("hci_uart registering device");
 
 	serdev_device_set_client_ops(hu->serdev, &hci_serdev_client_ops);
 
@@ -343,6 +347,8 @@ int hci_uart_register_device(struct hci_uart *hu,
 	}
 
 	set_bit(HCI_UART_REGISTERED, &hu->flags);
+
+	BT_DBG("hci_uart registering device Done");
 
 	return 0;
 
