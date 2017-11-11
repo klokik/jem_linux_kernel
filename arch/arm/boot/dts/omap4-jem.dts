@@ -70,28 +70,13 @@
 		shutdown-gpios = <&gpio2 11 GPIO_ACTIVE_HIGH>; 	// wlan_en
 	};
 
-	rfkill_bt {
+/*	rfkill_bt {
 		compatible = "rfkill-gpio";
 		rfkill-name = "bcm2076";
 		rfkill-type = "bluetooth";
 		reset-gpios = <&gpio2 21 GPIO_ACTIVE_HIGH>; 	// reset_n
 		shutdown-gpios = <&gpio2 14 GPIO_ACTIVE_HIGH>; 	// reg_en
-	};
-
-	bcm2076-bt {
-		compatible = "bcm2076";
-
-		// pinctrl-names = "default";
-		// pinctrl-0 = <&bt_pins>;
-
-		// shutdown-gpios = <&gpio2 14 GPIO_ACTIVE_HIGH>;
-		// reset-gpios = <&gpio2 21 GPIO_ACTIVE_HIGH>;
-		device-wakeup-gpios = <&gpio2 17 GPIO_ACTIVE_HIGH>;
-		// TODO: define as irq
-		host-wakeup-gpios = <&gpio4 18 GPIO_ACTIVE_HIGH>;
-
-		init-speed = <115200>;
-	};
+	};*/
 
 	sound {
 		// compatible = "ti,omap-wm8962";
@@ -258,7 +243,7 @@
 			/* &gpio_keys_pins */
 			&backlight_pins
 			&nt71391_pins
-			&bt_pins
+			/* &bt_pins */
 			/* &smb347_pins */
 			/* &wm8962_pins */
 	>;
@@ -388,9 +373,9 @@
 
 	dss_hdmi_pins: pinmux_dss_hdmi_pins {
 		pinctrl-single,pins = <
-			0x5a (PIN_INPUT_PULLUP | MUX_MODE0)	/* hdmi_cec.hdmi_cec */
-			0x5c (PIN_INPUT_PULLUP | MUX_MODE0)	/* hdmi_scl.hdmi_scl */
-			0x5e (PIN_INPUT_PULLUP | MUX_MODE0)	/* hdmi_sda.hdmi_sda */
+			0x5a (PIN_INPUT | MUX_MODE0)	/* hdmi_cec.hdmi_cec */
+			0x5c (PIN_INPUT | MUX_MODE0)	/* hdmi_scl.hdmi_scl */
+			0x5e (PIN_INPUT | MUX_MODE0)	/* hdmi_sda.hdmi_sda */
 		>;
 	};
 
@@ -821,6 +806,23 @@
 	pinctrl-0 = <&uart2_pins>;
 	interrupts-extended = <&wakeupgen GIC_SPI 73 IRQ_TYPE_LEVEL_HIGH
 				   &omap4_pmx_core OMAP4_UART2_RX>;
+
+	bluetooth {
+		compatible = "brcm,bcm2076-bt";
+		pinctrl-names = "default";
+		pinctrl-0 = <&bt_pins>;
+
+		interrupt-parent = <&gpio4>;
+		interrupts = <18 IRQ_TYPE_LEVEL_HIGH>;
+
+		// max-speed = <3692000>;
+
+		shutdown-gpios = <&gpio2 14 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&gpio2 21 GPIO_ACTIVE_HIGH>;
+		device-wakeup-gpios = <&gpio2 17 GPIO_ACTIVE_HIGH>;
+		// host-wakeup-gpios = <&gpio4 18 GPIO_ACTIVE_HIGH>;
+
+	};
 };
 
 &uart3 {
@@ -828,12 +830,6 @@
 	pinctrl-0 = <&uart3_pins>;
 	interrupts-extended = <&wakeupgen GIC_SPI 74 IRQ_TYPE_LEVEL_HIGH
 							&omap4_pmx_core OMAP4_UART3_RX>;
-	// not sure if right port
-/*	bluetooth {
-		compatible = "ti,wl1285-st";
-		enable-gpios = <&gpio6 14 GPIO_ACTIVE_HIGH>;
-		max-speed = <3686400>;
-	};*/
 };
 
 &uart4 {
