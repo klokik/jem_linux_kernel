@@ -37,7 +37,16 @@
 
 #include "hdmi4_core.h"
 
+#include "../../../../arch/arm/mach-omap2/control.h"
+
+
 #define HDMI_CORE_AV		0x500
+
+// #define OMAP4_CTRL_MODULE_PAD_CORE_CONTROL_I2C_1		0x0624
+// #define OMAP4_HDMI_DDC_SDA_PULLUPRESX_SHIFT			28
+// #define OMAP4_HDMI_DDC_SDA_PULLUPRESX_MASK			(1 << 28)
+// #define OMAP4_HDMI_DDC_SCL_PULLUPRESX_SHIFT			24
+// #define OMAP4_HDMI_DDC_SCL_PULLUPRESX_MASK			(1 << 24)
 
 static inline void __iomem *hdmi_av_base(struct hdmi_core_data *core)
 {
@@ -47,6 +56,13 @@ static inline void __iomem *hdmi_av_base(struct hdmi_core_data *core)
 static int hdmi_core_ddc_init(struct hdmi_core_data *core)
 {
 	void __iomem *base = core->base;
+	u32 reg;
+
+	/* Supposed to disable internal pullup resistors */
+	reg = omap_ctrl_readl(OMAP4_CTRL_MODULE_PAD_CORE_CONTROL_I2C_1);
+	reg |= (OMAP4_HDMI_DDC_SDA_PULLUPRESX_MASK |
+			OMAP4_HDMI_DDC_SDA_PULLUPRESX_MASK);
+	omap_ctrl_writel(reg, OMAP4_CTRL_MODULE_PAD_CORE_CONTROL_I2C_1);
 
 	/* Turn on CLK for DDC */
 	REG_FLD_MOD(base, HDMI_CORE_AV_DPD, 0x7, 2, 0);
