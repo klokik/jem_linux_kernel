@@ -83,20 +83,16 @@ static struct videomode nt71391_vm = {
 	.hactive		= 1920,
 	.vactive		= 1200,
 
-	.pixelclock		= 145066000,
-	//.pixelclock		= 145228800,
+	// .pixelclock		= 145066000,
+	.pixelclock		= 145228800,
 
 	.hfront_porch	= 9,
 	.hsync_len		= 5,
-	.hback_porch	= 9+5+50 - 9 - 5,
+	.hback_porch	= 50,
 
 	.vfront_porch	= 9,
 	.vsync_len		= 2,
-	.vback_porch	= 9+2+9 - 9 - 2,
-
-/*	.flags			=	DISPLAY_FLAGS_HSYNC_LOW | DISPLAY_FLAGS_VSYNC_LOW |
-						DISPLAY_FLAGS_DE_HIGH | DISPLAY_FLAGS_SYNC_NEGEDGE |
-						DISPLAY_FLAGS_PIXDATA_POSEDGE,*/
+	.vback_porch	= 9,
 };
 
 #ifdef USE_OMAP_TIMINGS
@@ -582,8 +578,6 @@ static int pdsivm_probe(struct platform_device *pdev)
 	dssdev->type = OMAP_DISPLAY_TYPE_DSI;
 	dssdev->owner = THIS_MODULE;
 
-	// dssdev->panel.dsi_pix_fmt = OMAP_DSS_DSI_FMT_RGB666_PACKED;
-
 	r = omapdss_register_display(dssdev);
 	if (r) {
 		dev_err(dev, "Failed to register panel\n");
@@ -649,18 +643,18 @@ static int pdsivm_power_on(struct panel_drv_data *ddata)
 	struct omap_dss_dsi_config dsi_config = {
 		.mode = OMAP_DSS_DSI_VIDEO_MODE,
 		.pixel_format = OMAP_DSS_DSI_FMT_RGB666_PACKED,
+		// .pixel_format = OMAP_DSS_DSI_FMT_RGB888,
 #ifdef USE_OMAP_TIMINGS
 		.timings = &ddata->timings,
 #else
 		.vm = &ddata->vm,
 #endif
-		.hs_clk_min = 192000000,
+		.hs_clk_min = 125000000,
 		.hs_clk_max = 450000000,
 		.lp_clk_min = 7000000,
 		.lp_clk_max = 10000000,
 		.ddr_clk_always_on = false,
-		.trans_mode = OMAP_DSS_DSI_PULSE_MODE,
-		//.trans_mode = OMAP_DSS_DSI_BURST_MODE,
+		.trans_mode = OMAP_DSS_DSI_BURST_MODE,
 	};
 
 /*	if (ddata->pin_config.num_pins > 0) {
@@ -710,26 +704,26 @@ static int pdsivm_power_on(struct panel_drv_data *ddata)
 	r = pdsivm_dcs_write_1(ddata, 0xae, 0x0d);
 	if (r)	goto err;
 
-	dev_dbg(&ddata->pdev->dev, "Test mode 1\n");
-	r = pdsivm_dcs_write_1(ddata, 0xee, 0xea);
-	if (r)	goto err;
+	// dev_dbg(&ddata->pdev->dev, "Test mode 1\n");
+	// r = pdsivm_dcs_write_1(ddata, 0xee, 0xea);
+	// if (r)	goto err;
 
-	dev_dbg(&ddata->pdev->dev, "Test mode 2\n");
-	r = pdsivm_dcs_write_1(ddata, 0xef, 0x5f);
-	if (r)	goto err;
+	// dev_dbg(&ddata->pdev->dev, "Test mode 2\n");
+	// r = pdsivm_dcs_write_1(ddata, 0xef, 0x5f);
+	// if (r)	goto err;
 
-	dev_dbg(&ddata->pdev->dev, "Bias\n");
-	r = pdsivm_dcs_write_1(ddata, 0xf2, 0x28);
-	if (r)	goto err;
+	// dev_dbg(&ddata->pdev->dev, "Bias\n");
+	// r = pdsivm_dcs_write_1(ddata, 0xf2, 0x28);
+	// if (r)	goto err;
 
 	dev_dbg(&ddata->pdev->dev, "CABC\n");
 	r = pdsivm_dcs_write_1(ddata, 0xb0, 0x7e);
 	if (r)	goto err;
 
-/*	dev_dbg(&ddata->pdev->dev, "Enter BIST mode\n");
-	r = pdsivm_dcs_write_1(ddata, 0xB1, 0xEF);
-	if (r)
-		goto err; */
+	// dev_dbg(&ddata->pdev->dev, "Enter BIST mode\n");
+	// r = pdsivm_dcs_write_1(ddata, 0xB1, 0xEF);
+	// if (r)
+	// 	goto err;
 
 	dev_dbg(&ddata->pdev->dev, "Clock 153\n");
 	nt71391_set_clk_153(ddata);

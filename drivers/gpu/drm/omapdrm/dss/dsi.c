@@ -4960,23 +4960,11 @@ static int dsi_set_config(struct omap_dss_device *dssdev,
 	dsi->vm_timings = ctx.dsi_vm;
 
 #if defined(CONFIG_DRM_OMAP_PANEL_NT71391)
-	dsi->vm_timings = (struct omap_dss_dsi_videomode_timings){
-		.hsa				= 0,
-		.hfp				= 27,
-		.hbp				= 6,
-		.vsa				= 1,
-		.vfp				= 10,
-		.vbp				= 9,
-		.hact				= 1920,
-		.vact				= 1200,
-		.blanking_mode		= 1,
-		.hsa_blanking_mode	= 1,
-		.hbp_blanking_mode	= 1,
-		.hfp_blanking_mode	= 1,
-		.trans_mode = OMAP_DSS_DSI_BURST_MODE,
-		.ddr_clk_always_on	= 0,
-		.window_sync		= 4,
-	};
+	// XXX: Fix timings, why wrong?
+	dsi->vm_timings.hfp += 24;
+	dsi->vm_timings.hbp -= 24;
+	dsi->vm_timings.vsa -= 1;
+	dsi->vm_timings.vfp += 1;
 #endif
 
 	mutex_unlock(&dsi->lock);
