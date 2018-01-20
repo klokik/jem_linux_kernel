@@ -98,6 +98,16 @@ config SND_OMAP_SOC_OMAP_TWL4030
 	  - SDP3430
 	  - Zoom2
 
+config SND_OMAP_SOC_OMAP_WM8962
+	tristate "SoC Audio support for TI SoC based boards with wm8962 codec"
+	depends on SND_OMAP_SOC && I2C && INPUT
+	select SND_SOC_WM8962
+	select SND_OMAP_SOC_MCBSP
+	help
+	  Say Y if you want to add support for SoC audio on TI SoC based boards
+	  using wm8962 as a codec. This driver currently supports:
+	  - Amazon Kindle Fire HD 2012 (Jem)
+
 config SND_OMAP_SOC_OMAP_ABE_TWL6040
 	tristate "SoC Audio support for OMAP boards using ABE and twl6040 codec"
 	depends on TWL6040_CORE && SND_OMAP_SOC && COMMON_CLK
