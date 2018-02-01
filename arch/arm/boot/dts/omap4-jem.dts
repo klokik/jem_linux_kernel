@@ -429,7 +429,7 @@
 			OMAP4_IOPAD(0x07a, PIN_OUTPUT_PULLDOWN | MUX_MODE3)		/* gpmc_ncs3.gpio_53 */
 			OMAP4_IOPAD(0x06c, PIN_OUTPUT_PULLDOWN | MUX_MODE3)		/* gpmc_a22.gpio_46 */
 			OMAP4_IOPAD(0x072, PIN_OUTPUT_PULLDOWN | MUX_MODE3)		/* gpmc_a25.gpio_49 */
-			OMAP4_IOPAD(0x0be, PIN_INPUT | MUX_MODE3)		/* cam_strobe.gpio_82 */ // Pullup?
+			OMAP4_IOPAD(0x0be, PIN_INPUT | MUX_MODE3)		/* cam_strobe.gpio_82 */
 		>;
 	};
 
