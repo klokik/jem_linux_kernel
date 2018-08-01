@@ -383,14 +383,15 @@
 			0x5a (PIN_INPUT | MUX_MODE0)	/* hdmi_cec.hdmi_cec */
 			0x5c (PIN_INPUT | MUX_MODE0)	/* hdmi_scl.hdmi_scl */
 			0x5e (PIN_INPUT | MUX_MODE0)	/* hdmi_sda.hdmi_sda */
+			OMAP4_IOPAD(0x8c, PIN_INPUT_PULLDOWN | MUX_MODE3) /* gpmc_wait2.gpio_100 WTF??? */
 		>;
 	};
 
 	tpd12s015_pins: pinmux_tpd12s015_pins {
 		pinctrl-single,pins = <
 			/* LS_OE, CT_CP_HPD - high to enable dcdc*/
-			0x22 (PIN_OUTPUT_PULLUP | MUX_MODE3)		/* gpmc_a17.gpio_41 */
-			0x48 (PIN_OUTPUT_PULLUP | MUX_MODE3)		/* gpmc_nbe1.gpio_60 */
+			0x22 (PIN_OUTPUT | MUX_MODE3)		/* gpmc_a17.gpio_41 */
+			0x48 (PIN_OUTPUT | MUX_MODE3)		/* gpmc_nbe1.gpio_60 */
 			0x58 (PIN_INPUT_PULLDOWN | MUX_MODE3)	/* hdmi_hpd.gpio_63 */
 		>;
 	};
