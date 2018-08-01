@@ -39,8 +39,7 @@
 #include <asm/io.h>
 #include <asm/pgtable.h>
 #include <asm/unwinder.h>
-
-extern char _etext, _stext;
+#include <asm/sections.h>
 
 int kstack_depth_to_print = 0x180;
 int lwa_flag;
@@ -251,27 +250,16 @@ void __init trap_init(void)
 
 asmlinkage void do_trap(struct pt_regs *regs, unsigned long address)
 {
-	siginfo_t info;
-	memset(&info, 0, sizeof(info));
-	info.si_signo = SIGTRAP;
-	info.si_code = TRAP_TRACE;
-	info.si_addr = (void *)address;
-	force_sig_info(SIGTRAP, &info, current);
+	force_sig_fault(SIGTRAP, TRAP_TRACE, (void __user *)address, current);
 
 	regs->pc += 4;
 }
 
 asmlinkage void do_unaligned_access(struct pt_regs *regs, unsigned long address)
 {
-	siginfo_t info;
-
 	if (user_mode(regs)) {
-		/* Send a SIGSEGV */
-		info.si_signo = SIGSEGV;
-		info.si_errno = 0;
-		/* info.si_code has been set above */
-		info.si_addr = (void *)address;
-		force_sig_info(SIGSEGV, &info, current);
+		/* Send a SIGBUS */
+		force_sig_fault(SIGBUS, BUS_ADRALN, (void __user *)address, current);
 	} else {
 		printk("KERNEL: Unaligned Access 0x%.8lx\n", address);
 		show_registers(regs);
@@ -282,15 +270,9 @@ asmlinkage void do_unaligned_access(struct pt_regs *regs, unsigned long address)
 
 asmlinkage void do_bus_fault(struct pt_regs *regs, unsigned long address)
 {
-	siginfo_t info;
-
 	if (user_mode(regs)) {
 		/* Send a SIGBUS */
-		info.si_signo = SIGBUS;
-		info.si_errno = 0;
-		info.si_code = BUS_ADRERR;
-		info.si_addr = (void *)address;
-		force_sig_info(SIGBUS, &info, current);
+		force_sig_fault(SIGBUS, BUS_ADRERR, (void __user *)address, current);
 	} else {		/* Kernel mode */
 		printk("KERNEL: Bus error (SIGBUS) 0x%.8lx\n", address);
 		show_registers(regs);
@@ -318,7 +300,7 @@ static inline int in_delay_slot(struct pt_regs *regs)
 		return 0;
 	}
 #else
-	return regs->sr & SPR_SR_DSX;
+	return mfspr(SPR_SR) & SPR_SR_DSX;
 #endif
 }
 
@@ -465,7 +447,6 @@ static inline void simulate_swa(struct pt_regs *regs, unsigned long address,
 asmlinkage void do_illegal_instruction(struct pt_regs *regs,
 				       unsigned long address)
 {
-	siginfo_t info;
 	unsigned int op;
 	unsigned int insn = *((unsigned int *)address);
 
@@ -486,11 +467,7 @@ asmlinkage void do_illegal_instruction(struct pt_regs *regs,
 
 	if (user_mode(regs)) {
 		/* Send a SIGILL */
-		info.si_signo = SIGILL;
-		info.si_errno = 0;
-		info.si_code = ILL_ILLOPC;
-		info.si_addr = (void *)address;
-		force_sig_info(SIGBUS, &info, current);
+		force_sig_fault(SIGILL, ILL_ILLOPC, (void __user *)address, current);
 	} else {		/* Kernel mode */
 		printk("KERNEL: Illegal instruction (SIGILL) 0x%.8lx\n",
 		       address);

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * mma8452.c - Support for following Freescale / NXP 3-axis accelerometers:
  *
@@ -13,9 +14,6 @@
  * Copyright 2015 Martin Kepplinger <martink@posteo.de>
  * Copyright 2014 Peter Meerwald <pmeerw@pmeerw.net>
  *
- * This file is subject to the terms and conditions of version 2 of
- * the GNU General Public License.  See the file COPYING in the main
- * directory of this archive for more details.
  *
  * TODO: orientation events
  */
@@ -108,6 +106,7 @@ struct mma8452_data {
 	u8 ctrl_reg1;
 	u8 data_cfg;
 	const struct mma_chip_info *chip_info;
+	int sleep_val;
 };
 
  /**
@@ -135,7 +134,7 @@ struct mma8452_event_regs {
 		u8 ev_count;
 };
 
-static const struct mma8452_event_regs ev_regs_accel_falling = {
+static const struct mma8452_event_regs ff_mt_ev_regs = {
 		.ev_cfg = MMA8452_FF_MT_CFG,
 		.ev_cfg_ele = MMA8452_FF_MT_CFG_ELE,
 		.ev_cfg_chan_shift = MMA8452_FF_MT_CHAN_SHIFT,
@@ -145,7 +144,7 @@ static const struct mma8452_event_regs ev_regs_accel_falling = {
 		.ev_count = MMA8452_FF_MT_COUNT
 };
 
-static const struct mma8452_event_regs ev_regs_accel_rising = {
+static const struct mma8452_event_regs trans_ev_regs = {
 		.ev_cfg = MMA8452_TRANSIENT_CFG,
 		.ev_cfg_ele = MMA8452_TRANSIENT_CFG_ELE,
 		.ev_cfg_chan_shift = MMA8452_TRANSIENT_CHAN_SHIFT,
@@ -195,7 +194,11 @@ static int mma8452_drdy(struct mma8452_data *data)
 		if ((ret & MMA8452_STATUS_DRDY) == MMA8452_STATUS_DRDY)
 			return 0;
 
-		msleep(20);
+		if (data->sleep_val <= 20)
+			usleep_range(data->sleep_val * 250,
+				     data->sleep_val * 500);
+		else
+			msleep(20);
 	}
 
 	dev_err(&data->client->dev, "data not ready\n");
@@ -284,7 +287,7 @@ static const int mma8452_samp_freq[8][2] = {
 };
 
 /* Datasheet table: step time "Relationship with the ODR" (sample frequency) */
-static const unsigned int mma8452_transient_time_step_us[4][8] = {
+static const unsigned int mma8452_time_step_us[4][8] = {
 	{ 1250, 2500, 5000, 10000, 20000, 20000, 20000, 20000 },  /* normal */
 	{ 1250, 2500, 5000, 10000, 20000, 80000, 80000, 80000 },  /* l p l n */
 	{ 1250, 2500, 2500, 2500, 2500, 2500, 2500, 2500 },	  /* high res*/
@@ -546,6 +549,18 @@ static int mma8452_read_raw(struct iio_dev *indio_dev,
 	return -EINVAL;
 }
 
+static int mma8452_calculate_sleep(struct mma8452_data *data)
+{
+	int ret, i = mma8452_get_odr_index(data);
+
+	if (mma8452_samp_freq[i][0] > 0)
+		ret = 1000 / mma8452_samp_freq[i][0];
+	else
+		ret = 1000;
+
+	return ret == 0 ? 1 : ret;
+}
+
 static int mma8452_standby(struct mma8452_data *data)
 {
 	return i2c_smbus_write_byte_data(data->client, MMA8452_CTRL_REG1,
@@ -702,6 +717,8 @@ static int mma8452_write_raw(struct iio_dev *indio_dev,
 		data->ctrl_reg1 &= ~MMA8452_CTRL_DR_MASK;
 		data->ctrl_reg1 |= i << MMA8452_CTRL_DR_SHIFT;
 
+		data->sleep_val = mma8452_calculate_sleep(data);
+
 		ret = mma8452_change_config(data, MMA8452_CTRL_REG1,
 					    data->ctrl_reg1);
 		break;
@@ -777,12 +794,12 @@ static int mma8452_get_event_regs(struct mma8452_data *data,
 					& MMA8452_INT_TRANS) &&
 				(data->chip_info->enabled_events
 					& MMA8452_INT_TRANS))
-				*ev_reg = &ev_regs_accel_rising;
+				*ev_reg = &trans_ev_regs;
 			else
-				*ev_reg = &ev_regs_accel_falling;
+				*ev_reg = &ff_mt_ev_regs;
 			return 0;
 		case IIO_EV_DIR_FALLING:
-			*ev_reg = &ev_regs_accel_falling;
+			*ev_reg = &ff_mt_ev_regs;
 			return 0;
 		default:
 			return -EINVAL;
@@ -826,7 +843,7 @@ static int mma8452_read_event_value(struct iio_dev *indio_dev,
 		if (power_mode < 0)
 			return power_mode;
 
-		us = ret * mma8452_transient_time_step_us[power_mode][
+		us = ret * mma8452_time_step_us[power_mode][
 				mma8452_get_odr_index(data)];
 		*val = us / USEC_PER_SEC;
 		*val2 = us % USEC_PER_SEC;
@@ -883,7 +900,7 @@ static int mma8452_write_event_value(struct iio_dev *indio_dev,
 			return ret;
 
 		steps = (val * USEC_PER_SEC + val2) /
-				mma8452_transient_time_step_us[ret][
+				mma8452_time_step_us[ret][
 					mma8452_get_odr_index(data)];
 
 		if (steps < 0 || steps > 0xff)
@@ -1036,7 +1053,7 @@ static irqreturn_t mma8452_interrupt(int irq, void *p)
 	if (src < 0)
 		return IRQ_NONE;
 
-	if (!(src & data->chip_info->enabled_events))
+	if (!(src & (data->chip_info->enabled_events | MMA8452_INT_DRDY)))
 		return IRQ_NONE;
 
 	if (src & MMA8452_INT_DRDY) {
@@ -1595,6 +1612,9 @@ static int mma8452_probe(struct i2c_client *client,
 
 	data->ctrl_reg1 = MMA8452_CTRL_ACTIVE |
 			  (MMA8452_CTRL_DR_DEFAULT << MMA8452_CTRL_DR_SHIFT);
+
+	data->sleep_val = mma8452_calculate_sleep(data);
+
 	ret = i2c_smbus_write_byte_data(client, MMA8452_CTRL_REG1,
 					data->ctrl_reg1);
 	if (ret < 0)

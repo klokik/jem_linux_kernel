@@ -2178,7 +2178,7 @@ static void pch_gbe_set_multi(struct net_device *netdev)
 
 	if (mc_count >= PCH_GBE_MAR_ENTRIES)
 		return;
-	mta_list = kmalloc(mc_count * ETH_ALEN, GFP_ATOMIC);
+	mta_list = kmalloc_array(ETH_ALEN, mc_count, GFP_ATOMIC);
 	if (!mta_list)
 		return;
 
@@ -2594,8 +2594,10 @@ static int pch_gbe_probe(struct pci_dev *pdev,
 	if (adapter->pdata && adapter->pdata->platform_init)
 		adapter->pdata->platform_init(pdev);
 
-	adapter->ptp_pdev = pci_get_bus_and_slot(adapter->pdev->bus->number,
-					       PCI_DEVFN(12, 4));
+	adapter->ptp_pdev =
+		pci_get_domain_bus_and_slot(pci_domain_nr(adapter->pdev->bus),
+					    adapter->pdev->bus->number,
+					    PCI_DEVFN(12, 4));
 
 	netdev->netdev_ops = &pch_gbe_netdev_ops;
 	netdev->watchdog_timeo = PCH_GBE_WATCHDOG_PERIOD;

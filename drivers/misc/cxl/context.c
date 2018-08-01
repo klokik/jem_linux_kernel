@@ -45,6 +45,8 @@ int cxl_context_init(struct cxl_context *ctx, struct cxl_afu *afu, bool master)
 	ctx->pid = NULL; /* Set in start work ioctl */
 	mutex_init(&ctx->mapping_lock);
 	ctx->mapping = NULL;
+	ctx->tidr = 0;
+	ctx->assign_tidr = false;
 
 	if (cxl_is_power8()) {
 		spin_lock_init(&ctx->sste_lock);
@@ -126,11 +128,12 @@ void cxl_context_set_mapping(struct cxl_context *ctx,
 	mutex_unlock(&ctx->mapping_lock);
 }
 
-static int cxl_mmap_fault(struct vm_fault *vmf)
+static vm_fault_t cxl_mmap_fault(struct vm_fault *vmf)
 {
 	struct vm_area_struct *vma = vmf->vma;
 	struct cxl_context *ctx = vma->vm_file->private_data;
 	u64 area, offset;
+	vm_fault_t ret;
 
 	offset = vmf->pgoff << PAGE_SHIFT;
 
@@ -167,11 +170,11 @@ static int cxl_mmap_fault(struct vm_fault *vmf)
 		return VM_FAULT_SIGBUS;
 	}
 
-	vm_insert_pfn(vma, vmf->address, (area + offset) >> PAGE_SHIFT);
+	ret = vmf_insert_pfn(vma, vmf->address, (area + offset) >> PAGE_SHIFT);
 
 	mutex_unlock(&ctx->status_mutex);
 
-	return VM_FAULT_NOPAGE;
+	return ret;
 }
 
 static const struct vm_operations_struct cxl_mmap_vmops = {

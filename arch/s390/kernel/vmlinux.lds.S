@@ -82,10 +82,10 @@ SECTIONS
 
 	. = ALIGN(PAGE_SIZE);
 	.init.text : AT(ADDR(.init.text) - LOAD_OFFSET) {
-		VMLINUX_SYMBOL(_sinittext) = . ;
+		_sinittext = .;
 		INIT_TEXT
 		. = ALIGN(PAGE_SIZE);
-		VMLINUX_SYMBOL(_einittext) = . ;
+		_einittext = .;
 	}
 
 	/*
@@ -123,6 +123,20 @@ SECTIONS
 		*(.altinstr_replacement)
 	}
 
+	/*
+	 * Table with the patch locations to undo expolines
+	*/
+	.nospec_call_table : {
+		__nospec_call_start = . ;
+		*(.s390_indirect*)
+		__nospec_call_end = . ;
+	}
+	.nospec_return_table : {
+		__nospec_return_start = . ;
+		*(.s390_return*)
+		__nospec_return_end = . ;
+	}
+
 	/* early.c uses stsi, which requires page aligned data. */
 	. = ALIGN(PAGE_SIZE);
 	INIT_DATA_SECTION(0x100)
@@ -141,4 +155,7 @@ SECTIONS
 
 	/* Sections to be discarded */
 	DISCARDS
+	/DISCARD/ : {
+		*(.eh_frame)
+	}
 }

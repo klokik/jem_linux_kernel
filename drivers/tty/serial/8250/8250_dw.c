@@ -9,6 +9,7 @@
  * LCR is written whilst busy.  If it is, then a busy detect interrupt is
  * raised, the LCR needs to be rewritten and the uart status register read.
  */
+#include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/io.h>
 #include <linux/module.h>
@@ -118,6 +119,42 @@ static void dw8250_check_lcr(struct uart_port *p, int value)
 	 * dev_err(p->dev, "Couldn't set LCR to %d\n", value);
 	 */
 }
+
+/* Returns once the transmitter is empty or we run out of retries */
+static void dw8250_tx_wait_empty(struct uart_port *p)
+{
+	unsigned int tries = 20000;
+	unsigned int delay_threshold = tries - 1000;
+	unsigned int lsr;
+
+	while (tries--) {
+		lsr = readb (p->membase + (UART_LSR << p->regshift));
+		if (lsr & UART_LSR_TEMT)
+			break;
+
+		/* The device is first given a chance to empty without delay,
+		 * to avoid slowdowns at high bitrates. If after 1000 tries
+		 * the buffer has still not emptied, allow more time for low-
+		 * speed links. */
+		if (tries < delay_threshold)
+			udelay (1);
+	}
+}
+
+static void dw8250_serial_out38x(struct uart_port *p, int offset, int value)
+{
+	struct dw8250_data *d = p->private_data;
+
+	/* Allow the TX to drain before we reconfigure */
+	if (offset == UART_LCR)
+		dw8250_tx_wait_empty(p);
+
+	writeb(value, p->membase + (offset << p->regshift));
+
+	if (offset == UART_LCR && !d->uart_16550_compatible)
+		dw8250_check_lcr(p, value);
+}
+
 
 static void dw8250_serial_out(struct uart_port *p, int offset, int value)
 {
@@ -252,31 +289,25 @@ static void dw8250_set_termios(struct uart_port *p, struct ktermios *termios,
 			       struct ktermios *old)
 {
 	unsigned int baud = tty_termios_baud_rate(termios);
-	unsigned int target_rate, min_rate, max_rate;
 	struct dw8250_data *d = p->private_data;
 	long rate;
-	int i, ret;
+	int ret;
 
 	if (IS_ERR(d->clk) || !old)
 		goto out;
 
-	/* Find a clk rate within +/-1.6% of an integer multiple of baudx16 */
-	target_rate = baud * 16;
-	min_rate = target_rate - (target_rate >> 6);
-	max_rate = target_rate + (target_rate >> 6);
-
-	for (i = 1; i <= UART_DIV_MAX; i++) {
-		rate = clk_round_rate(d->clk, i * target_rate);
-		if (rate >= i * min_rate && rate <= i * max_rate)
-			break;
-	}
-	if (i <= UART_DIV_MAX) {
-		clk_disable_unprepare(d->clk);
+	clk_disable_unprepare(d->clk);
+	rate = clk_round_rate(d->clk, baud * 16);
+	if (rate < 0)
+		ret = rate;
+	else if (rate == 0)
+		ret = -ENOENT;
+	else
 		ret = clk_set_rate(d->clk, rate);
-		clk_prepare_enable(d->clk);
-		if (!ret)
-			p->uartclk = rate;
-	}
+	clk_prepare_enable(d->clk);
+
+	if (!ret)
+		p->uartclk = rate;
 
 out:
 	p->status &= ~UPSTAT_AUTOCTS;
@@ -345,17 +376,14 @@ static void dw8250_quirks(struct uart_port *p, struct dw8250_data *data)
 			p->serial_in = dw8250_serial_in32be;
 			p->serial_out = dw8250_serial_out32be;
 		}
-	} else if (has_acpi_companion(p->dev)) {
-		const struct acpi_device_id *id;
+		if (of_device_is_compatible(np, "marvell,armada-38x-uart"))
+			p->serial_out = dw8250_serial_out38x;
 
-		id = acpi_match_device(p->dev->driver->acpi_match_table,
-				       p->dev);
-		if (id && !strcmp(id->id, "APMC0D08")) {
-			p->iotype = UPIO_MEM32;
-			p->regshift = 2;
-			p->serial_in = dw8250_serial_in32;
-			data->uart_16550_compatible = true;
-		}
+	} else if (acpi_dev_present("APMC0D08", NULL, -1)) {
+		p->iotype = UPIO_MEM32;
+		p->regshift = 2;
+		p->serial_in = dw8250_serial_in32;
+		data->uart_16550_compatible = true;
 	}
 
 	/* Platforms with iDMA */
@@ -515,7 +543,8 @@ static int dw8250_probe(struct platform_device *pdev)
 	/* If no clock rate is defined, fail. */
 	if (!p->uartclk) {
 		dev_err(dev, "clock rate not defined\n");
-		return -EINVAL;
+		err = -EINVAL;
+		goto err_clk;
 	}
 
 	data->pclk = devm_clk_get(dev, "apb_pclk");
@@ -546,6 +575,10 @@ static int dw8250_probe(struct platform_device *pdev)
 
 	if (!data->skip_autocfg)
 		dw8250_setup_port(p);
+
+#ifdef CONFIG_PM
+	uart.capabilities |= UART_CAP_RPM;
+#endif
 
 	/* If we have a valid fifosize, try hooking up DMA */
 	if (p->fifosize) {
@@ -659,6 +692,7 @@ static const struct dev_pm_ops dw8250_pm_ops = {
 static const struct of_device_id dw8250_of_match[] = {
 	{ .compatible = "snps,dw-apb-uart" },
 	{ .compatible = "cavium,octeon-3860-uart" },
+	{ .compatible = "marvell,armada-38x-uart" },
 	{ /* Sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, dw8250_of_match);

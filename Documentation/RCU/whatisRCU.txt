@@ -1,3 +1,5 @@
+What is RCU?  --  "Read, Copy, Update"
+
 Please note that the "What is RCU?" LWN series is an excellent place
 to start learning about RCU:
 
@@ -600,8 +602,7 @@ don't forget about them when submitting patches making use of RCU!]
 
 	#define rcu_dereference(p) \
 	({ \
-		typeof(p) _________p1 = p; \
-		smp_read_barrier_depends(); \
+		typeof(p) _________p1 = READ_ONCE(p); \
 		(_________p1); \
 	})
 

@@ -75,11 +75,6 @@ void dump_resmap(void)
 static inline void dump_resmap(void) {;}
 #endif
 
-static int pa11_dma_supported( struct device *dev, u64 mask)
-{
-	return 1;
-}
-
 static inline int map_pte_uncached(pte_t * pte,
 		unsigned long vaddr,
 		unsigned long size, unsigned long *paddr_ptr)
@@ -372,19 +367,6 @@ static int proc_pcxl_dma_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static int proc_pcxl_dma_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, proc_pcxl_dma_show, NULL);
-}
-
-static const struct file_operations proc_pcxl_dma_ops = {
-	.owner		= THIS_MODULE,
-	.open		= proc_pcxl_dma_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
-
 static int __init
 pcxl_dma_init(void)
 {
@@ -402,8 +384,8 @@ pcxl_dma_init(void)
 			"pcxl_dma_init: Unable to create gsc /proc dir entry\n");
 	else {
 		struct proc_dir_entry* ent;
-		ent = proc_create("pcxl_dma", 0, proc_gsc_root,
-				  &proc_pcxl_dma_ops);
+		ent = proc_create_single("pcxl_dma", 0, proc_gsc_root,
+				proc_pcxl_dma_show);
 		if (!ent)
 			printk(KERN_WARNING
 				"pci-dma.c: Unable to create pcxl_dma /proc entry.\n");
@@ -579,7 +561,6 @@ static void pa11_dma_cache_sync(struct device *dev, void *vaddr, size_t size,
 }
 
 const struct dma_map_ops pcxl_dma_ops = {
-	.dma_supported =	pa11_dma_supported,
 	.alloc =		pa11_dma_alloc,
 	.free =			pa11_dma_free,
 	.map_page =		pa11_dma_map_page,
@@ -616,7 +597,6 @@ static void pcx_dma_free(struct device *dev, size_t size, void *vaddr,
 }
 
 const struct dma_map_ops pcx_dma_ops = {
-	.dma_supported =	pa11_dma_supported,
 	.alloc =		pcx_dma_alloc,
 	.free =			pcx_dma_free,
 	.map_page =		pa11_dma_map_page,

@@ -32,8 +32,8 @@
 #include "i915_gem_gtt.h"
 #include "i915_gem_fence_reg.h"
 #include "i915_gem_object.h"
-#include "i915_gem_request.h"
 
+#include "i915_request.h"
 
 enum i915_cache_level;
 
@@ -90,6 +90,7 @@ struct i915_vma {
 #define I915_VMA_CLOSED		BIT(10)
 #define I915_VMA_USERFAULT_BIT	11
 #define I915_VMA_USERFAULT	BIT(I915_VMA_USERFAULT_BIT)
+#define I915_VMA_GGTT_WRITE	BIT(12)
 
 	unsigned int active;
 	struct i915_gem_active last_read[I915_NUM_ENGINES];
@@ -118,6 +119,8 @@ struct i915_vma {
 	/** This vma's place in the eviction list */
 	struct list_head evict_link;
 
+	struct list_head closed_link;
+
 	/**
 	 * Used for performing relocations during execbuffer insertion.
 	 */
@@ -137,6 +140,24 @@ static inline bool i915_vma_is_ggtt(const struct i915_vma *vma)
 {
 	return vma->flags & I915_VMA_GGTT;
 }
+
+static inline bool i915_vma_has_ggtt_write(const struct i915_vma *vma)
+{
+	return vma->flags & I915_VMA_GGTT_WRITE;
+}
+
+static inline void i915_vma_set_ggtt_write(struct i915_vma *vma)
+{
+	GEM_BUG_ON(!i915_vma_is_ggtt(vma));
+	vma->flags |= I915_VMA_GGTT_WRITE;
+}
+
+static inline void i915_vma_unset_ggtt_write(struct i915_vma *vma)
+{
+	vma->flags &= ~I915_VMA_GGTT_WRITE;
+}
+
+void i915_vma_flush_writes(struct i915_vma *vma);
 
 static inline bool i915_vma_is_map_and_fenceable(const struct i915_vma *vma)
 {
@@ -266,6 +287,8 @@ void i915_vma_revoke_mmap(struct i915_vma *vma);
 int __must_check i915_vma_unbind(struct i915_vma *vma);
 void i915_vma_unlink_ctx(struct i915_vma *vma);
 void i915_vma_close(struct i915_vma *vma);
+void i915_vma_reopen(struct i915_vma *vma);
+void i915_vma_destroy(struct i915_vma *vma);
 
 int __i915_vma_do_pin(struct i915_vma *vma,
 		      u64 size, u64 alignment, u64 flags);
@@ -389,5 +412,21 @@ i915_vma_unpin_fence(struct i915_vma *vma)
 		__i915_vma_unpin_fence(vma);
 }
 
-#endif
+void i915_vma_parked(struct drm_i915_private *i915);
 
+#define for_each_until(cond) if (cond) break; else
+
+/**
+ * for_each_ggtt_vma - Iterate over the GGTT VMA belonging to an object.
+ * @V: the #i915_vma iterator
+ * @OBJ: the #drm_i915_gem_object
+ *
+ * GGTT VMA are placed at the being of the object's vma_list, see
+ * vma_create(), so we can stop our walk as soon as we see a ppgtt VMA,
+ * or the list is empty ofc.
+ */
+#define for_each_ggtt_vma(V, OBJ) \
+	list_for_each_entry(V, &(OBJ)->vma_list, obj_link)		\
+		for_each_until(!i915_vma_is_ggtt(V))
+
+#endif

@@ -42,7 +42,8 @@ static int alloc_ila_locks(struct ila_net *ilan)
 	size = roundup_pow_of_two(nr_pcpus * LOCKS_PER_CPU);
 
 	if (sizeof(spinlock_t) != 0) {
-		ilan->locks = kvmalloc(size * sizeof(spinlock_t), GFP_KERNEL);
+		ilan->locks = kvmalloc_array(size, sizeof(spinlock_t),
+					     GFP_KERNEL);
 		if (!ilan->locks)
 			return -ENOMEM;
 		for (i = 0; i < size; i++)
@@ -512,9 +513,7 @@ static int ila_nl_dump(struct sk_buff *skb, struct netlink_callback *cb)
 	struct ila_map *ila;
 	int ret;
 
-	ret = rhashtable_walk_start(rhiter);
-	if (ret && ret != -EAGAIN)
-		goto done;
+	rhashtable_walk_start(rhiter);
 
 	for (;;) {
 		ila = rhashtable_walk_next(rhiter);

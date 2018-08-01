@@ -962,7 +962,6 @@ static void _rtl_usb_tx_preprocess(struct ieee80211_hw *hw,
 	memset(&tcb_desc, 0, sizeof(struct rtl_tcb_desc));
 	if (ieee80211_is_auth(fc)) {
 		RT_TRACE(rtlpriv, COMP_SEND, DBG_DMESG, "MAC80211_LINKING\n");
-		rtl_ips_nic_on(hw);
 	}
 
 	if (rtlpriv->psc.sw_ps_enabled) {
@@ -1049,7 +1048,7 @@ int rtl_usb_probe(struct usb_interface *intf,
 	}
 	rtlpriv = hw->priv;
 	rtlpriv->hw = hw;
-	rtlpriv->usb_data = kzalloc(RTL_USB_MAX_RX_COUNT * sizeof(u32),
+	rtlpriv->usb_data = kcalloc(RTL_USB_MAX_RX_COUNT, sizeof(u32),
 				    GFP_KERNEL);
 	if (!rtlpriv->usb_data)
 		return -ENOMEM;
@@ -1133,7 +1132,7 @@ void rtl_usb_disconnect(struct usb_interface *intf)
 		ieee80211_unregister_hw(hw);
 		rtlmac->mac80211_registered = 0;
 	} else {
-		rtl_deinit_deferred_work(hw);
+		rtl_deinit_deferred_work(hw, false);
 		rtlpriv->intf_ops->adapter_stop(hw);
 	}
 	/*deinit rfkill */

@@ -114,14 +114,14 @@ static int fill_action_fields(struct adapter *adap,
 
 		/* Re-direct to specified port in hardware. */
 		if (is_tcf_mirred_egress_redirect(a)) {
-			struct net_device *n_dev;
-			unsigned int i, index;
+			struct net_device *n_dev, *target_dev;
 			bool found = false;
+			unsigned int i;
 
-			index = tcf_mirred_ifindex(a);
+			target_dev = tcf_mirred_dev(a);
 			for_each_port(adap, i) {
 				n_dev = adap->port[i];
-				if (index == n_dev->ifindex) {
+				if (target_dev == n_dev) {
 					fs->action = FILTER_SWITCH;
 					fs->eport = i;
 					found = true;
@@ -457,7 +457,8 @@ struct cxgb4_tc_u32_table *cxgb4_init_tc_u32(struct adapter *adap)
 		unsigned int bmap_size;
 
 		bmap_size = BITS_TO_LONGS(max_tids);
-		link->tid_map = kvzalloc(sizeof(unsigned long) * bmap_size, GFP_KERNEL);
+		link->tid_map = kvcalloc(bmap_size, sizeof(unsigned long),
+					 GFP_KERNEL);
 		if (!link->tid_map)
 			goto out_no_mem;
 		bitmap_zero(link->tid_map, max_tids);

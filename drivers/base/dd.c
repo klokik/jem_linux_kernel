@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * drivers/base/dd.c - The core device/driver interactions.
  *
@@ -13,8 +14,6 @@
  * Copyright (c) 2002-3 Open Source Development Labs
  * Copyright (c) 2007-2009 Greg Kroah-Hartman <gregkh@suse.de>
  * Copyright (c) 2007-2009 Novell Inc.
- *
- * This file is released under the GPLv2
  */
 
 #include <linux/device.h>
@@ -123,9 +122,7 @@ static void deferred_probe_work_func(struct work_struct *work)
 		 * the list is a good order for suspend but deferred
 		 * probe makes that very unsafe.
 		 */
-		device_pm_lock();
-		device_pm_move_last(dev);
-		device_pm_unlock();
+		device_pm_move_to_tail(dev);
 
 		dev_dbg(dev, "Retrying from deferred list\n");
 		if (initcall_debug && !initcalls_done)
@@ -289,6 +286,17 @@ static void driver_bound(struct device *dev)
 	kobject_uevent(&dev->kobj, KOBJ_BIND);
 }
 
+static ssize_t coredump_store(struct device *dev, struct device_attribute *attr,
+			    const char *buf, size_t count)
+{
+	device_lock(dev);
+	dev->driver->coredump(dev);
+	device_unlock(dev);
+
+	return count;
+}
+static DEVICE_ATTR_WO(coredump);
+
 static int driver_sysfs_add(struct device *dev)
 {
 	int ret;
@@ -298,14 +306,26 @@ static int driver_sysfs_add(struct device *dev)
 					     BUS_NOTIFY_BIND_DRIVER, dev);
 
 	ret = sysfs_create_link(&dev->driver->p->kobj, &dev->kobj,
+				kobject_name(&dev->kobj));
+	if (ret)
+		goto fail;
+
+	ret = sysfs_create_link(&dev->kobj, &dev->driver->p->kobj,
+				"driver");
+	if (ret)
+		goto rm_dev;
+
+	if (!IS_ENABLED(CONFIG_DEV_COREDUMP) || !dev->driver->coredump ||
+	    !device_create_file(dev, &dev_attr_coredump))
+		return 0;
+
+	sysfs_remove_link(&dev->kobj, "driver");
+
+rm_dev:
+	sysfs_remove_link(&dev->driver->p->kobj,
 			  kobject_name(&dev->kobj));
-	if (ret == 0) {
-		ret = sysfs_create_link(&dev->kobj, &dev->driver->p->kobj,
-					"driver");
-		if (ret)
-			sysfs_remove_link(&dev->driver->p->kobj,
-					kobject_name(&dev->kobj));
-	}
+
+fail:
 	return ret;
 }
 
@@ -314,6 +334,8 @@ static void driver_sysfs_remove(struct device *dev)
 	struct device_driver *drv = dev->driver;
 
 	if (drv) {
+		if (drv->coredump)
+			device_remove_file(dev, &dev_attr_coredump);
 		sysfs_remove_link(&drv->p->kobj, kobject_name(&dev->kobj));
 		sysfs_remove_link(&dev->kobj, "driver");
 	}
@@ -411,14 +433,6 @@ re_probe:
 		if (ret)
 			goto probe_failed;
 	}
-
-	/*
-	 * Ensure devices are listed in devices_kset in correct order
-	 * It's important to move Dev to the end of devices_kset before
-	 * calling .probe, because it could be recursive and parent Dev
-	 * should always go first
-	 */
-	devices_kset_move_last(dev);
 
 	if (dev->bus->probe) {
 		ret = dev->bus->probe(dev);
@@ -793,13 +807,13 @@ static int __driver_attach(struct device *dev, void *data)
 		return ret;
 	} /* ret > 0 means positive match */
 
-	if (dev->parent)	/* Needed for USB */
+	if (dev->parent && dev->bus->need_parent_lock)
 		device_lock(dev->parent);
 	device_lock(dev);
 	if (!dev->driver)
 		driver_probe_device(drv, dev);
 	device_unlock(dev);
-	if (dev->parent)
+	if (dev->parent && dev->bus->need_parent_lock)
 		device_unlock(dev->parent);
 
 	return 0;
@@ -895,7 +909,7 @@ void device_release_driver_internal(struct device *dev,
 				    struct device_driver *drv,
 				    struct device *parent)
 {
-	if (parent)
+	if (parent && dev->bus->need_parent_lock)
 		device_lock(parent);
 
 	device_lock(dev);
@@ -903,7 +917,7 @@ void device_release_driver_internal(struct device *dev,
 		__device_release_driver(dev, parent);
 
 	device_unlock(dev);
-	if (parent)
+	if (parent && dev->bus->need_parent_lock)
 		device_unlock(parent);
 }
 

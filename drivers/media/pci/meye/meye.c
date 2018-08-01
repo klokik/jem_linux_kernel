@@ -1423,14 +1423,14 @@ static long vidioc_default(struct file *file, void *fh, bool valid_prio,
 
 }
 
-static unsigned int meye_poll(struct file *file, poll_table *wait)
+static __poll_t meye_poll(struct file *file, poll_table *wait)
 {
-	unsigned int res = v4l2_ctrl_poll(file, wait);
+	__poll_t res = v4l2_ctrl_poll(file, wait);
 
 	mutex_lock(&meye.lock);
 	poll_wait(file, &meye.proc_list, wait);
 	if (kfifo_len(&meye.doneq))
-		res |= POLLIN | POLLRDNORM;
+		res |= EPOLLIN | EPOLLRDNORM;
 	mutex_unlock(&meye.lock);
 	return res;
 }
@@ -1536,7 +1536,7 @@ static const struct v4l2_ioctl_ops meye_ioctl_ops = {
 static const struct video_device meye_template = {
 	.name		= "meye",
 	.fops		= &meye_fops,
-	.ioctl_ops 	= &meye_ioctl_ops,
+	.ioctl_ops	= &meye_ioctl_ops,
 	.release	= video_device_release_empty,
 };
 
@@ -1625,7 +1625,7 @@ static int meye_probe(struct pci_dev *pcidev, const struct pci_device_id *ent)
 	ret = -ENOMEM;
 	meye.mchip_dev = pcidev;
 
-	meye.grab_temp = vmalloc(MCHIP_NB_PAGES_MJPEG * PAGE_SIZE);
+	meye.grab_temp = vmalloc(array_size(PAGE_SIZE, MCHIP_NB_PAGES_MJPEG));
 	if (!meye.grab_temp)
 		goto outvmalloc;
 

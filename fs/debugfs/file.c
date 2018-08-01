@@ -18,7 +18,7 @@
 #include <linux/slab.h>
 #include <linux/atomic.h>
 #include <linux/device.h>
-#include <asm/poll.h>
+#include <linux/poll.h>
 
 #include "internal.h"
 
@@ -206,15 +206,15 @@ FULL_PROXY_FUNC(unlocked_ioctl, long, filp,
 		PROTO(struct file *filp, unsigned int cmd, unsigned long arg),
 		ARGS(filp, cmd, arg));
 
-static unsigned int full_proxy_poll(struct file *filp,
+static __poll_t full_proxy_poll(struct file *filp,
 				struct poll_table_struct *wait)
 {
 	struct dentry *dentry = F_DENTRY(filp);
-	unsigned int r = 0;
+	__poll_t r = 0;
 	const struct file_operations *real_fops;
 
 	if (debugfs_file_get(dentry))
-		return POLLHUP;
+		return EPOLLHUP;
 
 	real_fops = debugfs_real_fops(filp);
 	r = real_fops->poll(filp, wait);
@@ -796,19 +796,13 @@ EXPORT_SYMBOL_GPL(debugfs_read_file_bool);
 ssize_t debugfs_write_file_bool(struct file *file, const char __user *user_buf,
 				size_t count, loff_t *ppos)
 {
-	char buf[32];
-	size_t buf_size;
 	bool bv;
 	int r;
 	bool *val = file->private_data;
 	struct dentry *dentry = F_DENTRY(file);
 
-	buf_size = min(count, (sizeof(buf)-1));
-	if (copy_from_user(buf, user_buf, buf_size))
-		return -EFAULT;
-
-	buf[buf_size] = '\0';
-	if (strtobool(buf, &bv) == 0) {
+	r = kstrtobool_from_user(user_buf, count, &bv);
+	if (!r) {
 		r = debugfs_file_get(dentry);
 		if (unlikely(r))
 			return r;

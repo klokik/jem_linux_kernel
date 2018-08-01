@@ -58,11 +58,6 @@ int qtnf_cmd_send_change_sta(struct qtnf_vif *vif, const u8 *mac,
 			     struct station_parameters *params);
 int qtnf_cmd_send_del_sta(struct qtnf_vif *vif,
 			  struct station_del_parameters *params);
-
-int qtnf_cmd_resp_parse(struct qtnf_bus *bus, struct sk_buff *resp_skb);
-int qtnf_cmd_resp_check(const struct qtnf_vif *vif,
-			const struct sk_buff *resp_skb, u16 cmd_id,
-			u16 *result, const u8 **payload, size_t *payload_size);
 int qtnf_cmd_send_scan(struct qtnf_wmac *mac);
 int qtnf_cmd_send_connect(struct qtnf_vif *vif,
 			  struct cfg80211_connect_params *sme);
@@ -76,5 +71,10 @@ int qtnf_cmd_get_chan_stats(struct qtnf_wmac *mac, u16 channel,
 int qtnf_cmd_send_chan_switch(struct qtnf_vif *vif,
 			      struct cfg80211_csa_settings *params);
 int qtnf_cmd_get_channel(struct qtnf_vif *vif, struct cfg80211_chan_def *chdef);
+int qtnf_cmd_start_cac(const struct qtnf_vif *vif,
+		       const struct cfg80211_chan_def *chdef,
+		       u32 cac_time_ms);
+int qtnf_cmd_set_mac_acl(const struct qtnf_vif *vif,
+			 const struct cfg80211_acl_data *params);
 
 #endif /* QLINK_COMMANDS_H_ */

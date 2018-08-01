@@ -16049,8 +16049,7 @@ static void wlc_phy_workarounds_nphy_gainctrl(struct brcms_phy *pi)
 		wlc_phy_set_rfseq_nphy(pi, NPHY_RFSEQ_UPDATEGAINU,
 				       rfseq_updategainu_events,
 				       rfseq_updategainu_dlys,
-				       sizeof(rfseq_updategainu_events) /
-				       sizeof(rfseq_updategainu_events[0]));
+				       ARRAY_SIZE(rfseq_updategainu_events));
 
 		mod_phy_reg(pi, 0x153, (0xff << 8), (90 << 8));
 
@@ -23033,7 +23032,7 @@ wlc_phy_loadsampletable_nphy(struct brcms_phy *pi, struct cordic_iq *tone_buf,
 	u16 t;
 	u32 *data_buf = NULL;
 
-	data_buf = kmalloc(sizeof(u32) * num_samps, GFP_ATOMIC);
+	data_buf = kmalloc_array(num_samps, sizeof(u32), GFP_ATOMIC);
 	if (data_buf == NULL)
 		return;
 
@@ -23075,7 +23074,8 @@ wlc_phy_gen_load_samples_nphy(struct brcms_phy *pi, u32 f_kHz, u16 max_val,
 		tbl_len = (phy_bw << 1);
 	}
 
-	tone_buf = kmalloc(sizeof(struct cordic_iq) * tbl_len, GFP_ATOMIC);
+	tone_buf = kmalloc_array(tbl_len, sizeof(struct cordic_iq),
+				 GFP_ATOMIC);
 	if (tone_buf == NULL)
 		return 0;
 

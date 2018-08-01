@@ -196,10 +196,12 @@ struct mtu3_gpd_ring {
 * @vbus: vbus 5V used by host mode
 * @edev: external connector used to detect vbus and iddig changes
 * @vbus_nb: notifier for vbus detection
-* @vbus_nb: notifier for iddig(idpin) detection
-* @extcon_reg_dwork: delay work for extcon notifier register, waiting for
-*		xHCI driver initialization, it's necessary for system bootup
-*		as device.
+* @vbus_work : work of vbus detection notifier, used to avoid sleep in
+*		notifier callback which is atomic context
+* @vbus_event : event of vbus detecion notifier
+* @id_nb : notifier for iddig(idpin) detection
+* @id_work : work of iddig detection notifier
+* @id_event : event of iddig detecion notifier
 * @is_u3_drd: whether port0 supports usb3.0 dual-role device or not
 * @manual_drd_enabled: it's true when supports dual-role device by debugfs
 *		to switch host/device modes depending on user input.
@@ -208,8 +210,11 @@ struct otg_switch_mtk {
 	struct regulator *vbus;
 	struct extcon_dev *edev;
 	struct notifier_block vbus_nb;
+	struct work_struct vbus_work;
+	unsigned long vbus_event;
 	struct notifier_block id_nb;
-	struct delayed_work extcon_reg_dwork;
+	struct work_struct id_work;
+	unsigned long id_event;
 	bool is_u3_drd;
 	bool manual_drd_enabled;
 };
@@ -229,7 +234,10 @@ struct otg_switch_mtk {
  * @u3p_dis_msk: mask of disabling usb3 ports, for example, bit0==1 to
  *		disable u3port0, bit1==1 to disable u3port1,... etc
  * @dbgfs_root: only used when supports manual dual-role switch via debugfs
- * @wakeup_en: it's true when supports remote wakeup in host mode
+ * @uwk_en: it's true when supports remote wakeup in host mode
+ * @uwk: syscon including usb wakeup glue layer between SSUSB IP and SPM
+ * @uwk_reg_base: the base address of the wakeup glue layer in @uwk
+ * @uwk_vers: the version of the wakeup glue layer
  */
 struct ssusb_mtk {
 	struct device *dev;
@@ -253,8 +261,10 @@ struct ssusb_mtk {
 	int u3p_dis_msk;
 	struct dentry *dbgfs_root;
 	/* usb wakeup for host mode */
-	bool wakeup_en;
-	struct regmap *pericfg;
+	bool uwk_en;
+	struct regmap *uwk;
+	u32 uwk_reg_base;
+	u32 uwk_vers;
 };
 
 /**

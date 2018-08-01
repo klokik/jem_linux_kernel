@@ -155,6 +155,8 @@ static ssize_t target_core_item_dbroot_store(struct config_item *item,
 
 	mutex_unlock(&g_tf_lock);
 
+	pr_debug("Target_Core_ConfigFS: db_root set to %s\n", db_root);
+
 	return read_bytes;
 }
 
@@ -1197,6 +1199,7 @@ struct configfs_attribute *passthrough_attrib_attrs[] = {
 EXPORT_SYMBOL(passthrough_attrib_attrs);
 
 TB_CIT_SETUP_DRV(dev_attrib, NULL, NULL);
+TB_CIT_SETUP_DRV(dev_action, NULL, NULL);
 
 /* End functions for struct config_item_type tb_dev_attrib_cit */
 
@@ -2940,6 +2943,10 @@ static struct config_group *target_core_make_subdev(
 
 	config_group_init_type_name(&dev->dev_group, name, &tb->tb_dev_cit);
 
+	config_group_init_type_name(&dev->dev_action_group, "action",
+			&tb->tb_dev_action_cit);
+	configfs_add_default_group(&dev->dev_action_group, &dev->dev_group);
+
 	config_group_init_type_name(&dev->dev_attrib.da_group, "attrib",
 			&tb->tb_dev_attrib_cit);
 	configfs_add_default_group(&dev->dev_attrib.da_group, &dev->dev_group);
@@ -3200,11 +3207,33 @@ static const struct config_item_type target_core_cit = {
 void target_setup_backend_cits(struct target_backend *tb)
 {
 	target_core_setup_dev_cit(tb);
+	target_core_setup_dev_action_cit(tb);
 	target_core_setup_dev_attrib_cit(tb);
 	target_core_setup_dev_pr_cit(tb);
 	target_core_setup_dev_wwn_cit(tb);
 	target_core_setup_dev_alua_tg_pt_gps_cit(tb);
 	target_core_setup_dev_stat_cit(tb);
+}
+
+static void target_init_dbroot(void)
+{
+	struct file *fp;
+
+	snprintf(db_root_stage, DB_ROOT_LEN, DB_ROOT_PREFERRED);
+	fp = filp_open(db_root_stage, O_RDONLY, 0);
+	if (IS_ERR(fp)) {
+		pr_err("db_root: cannot open: %s\n", db_root_stage);
+		return;
+	}
+	if (!S_ISDIR(file_inode(fp)->i_mode)) {
+		filp_close(fp, NULL);
+		pr_err("db_root: not a valid directory: %s\n", db_root_stage);
+		return;
+	}
+	filp_close(fp, NULL);
+
+	strncpy(db_root, db_root_stage, DB_ROOT_LEN);
+	pr_debug("Target_Core_ConfigFS: db_root set to %s\n", db_root);
 }
 
 static int __init target_core_init_configfs(void)
@@ -3286,6 +3315,8 @@ static int __init target_core_init_configfs(void)
 	ret = target_xcopy_setup_pt();
 	if (ret < 0)
 		goto out;
+
+	target_init_dbroot();
 
 	return 0;
 

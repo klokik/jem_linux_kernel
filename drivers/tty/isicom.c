@@ -219,13 +219,9 @@ static struct isi_port  isi_ports[PORT_COUNT];
 static int WaitTillCardIsFree(unsigned long base)
 {
 	unsigned int count = 0;
-	unsigned int a = in_atomic(); /* do we run under spinlock? */
 
 	while (!(inw(base + 0xe) & 0x1) && count++ < 100)
-		if (a)
-			mdelay(1);
-		else
-			msleep(1);
+		mdelay(1);
 
 	return !(inw(base + 0xe) & 0x1);
 }
@@ -1481,7 +1477,7 @@ static int load_firmware(struct pci_dev *pdev,
 			goto errrelfw;
 		}
 
-		data = kmalloc(word_count * 2, GFP_KERNEL);
+		data = kmalloc_array(word_count, 2, GFP_KERNEL);
 		if (data == NULL) {
 			dev_err(&pdev->dev, "Card%d, firmware upload "
 				"failed, not enough memory\n", index + 1);

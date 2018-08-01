@@ -161,6 +161,7 @@ static const struct {
 	QEDE_STAT(no_buff_discards),
 	QEDE_PF_STAT(mftag_filter_discards),
 	QEDE_PF_STAT(mac_filter_discards),
+	QEDE_PF_STAT(gft_filter_drop),
 	QEDE_STAT(tx_err_drop_pkts),
 	QEDE_STAT(ttl0_discard),
 	QEDE_STAT(packet_too_big_discard),
@@ -170,6 +171,8 @@ static const struct {
 	QEDE_STAT(coalesced_aborts_num),
 	QEDE_STAT(non_coalesced_pkts),
 	QEDE_STAT(coalesced_bytes),
+
+	QEDE_STAT(link_change_count),
 };
 
 #define QEDE_NUM_STATS	ARRAY_SIZE(qede_stats_arr)
@@ -699,6 +702,14 @@ static u32 qede_get_link(struct net_device *dev)
 	return current_link.link_up;
 }
 
+static int qede_flash_device(struct net_device *dev,
+			     struct ethtool_flash *flash)
+{
+	struct qede_dev *edev = netdev_priv(dev);
+
+	return edev->ops->common->nvm_flash(edev->cdev, flash->data);
+}
+
 static int qede_get_coalesce(struct net_device *dev,
 			     struct ethtool_coalesce *coal)
 {
@@ -939,6 +950,9 @@ int qede_change_mtu(struct net_device *ndev, int new_mtu)
 
 	DP_VERBOSE(edev, (NETIF_MSG_IFUP | NETIF_MSG_IFDOWN),
 		   "Configuring MTU size of %d\n", new_mtu);
+
+	if (new_mtu > PAGE_SIZE)
+		ndev->features &= ~NETIF_F_GRO_HW;
 
 	/* Set the mtu field and re-start the interface if needed */
 	args.u.mtu = new_mtu;
@@ -1497,7 +1511,8 @@ static int qede_selftest_receive_traffic(struct qede_dev *edev)
 		len =  le16_to_cpu(fp_cqe->len_on_first_bd);
 		data_ptr = (u8 *)(page_address(sw_rx_data->data) +
 				  fp_cqe->placement_offset +
-				  sw_rx_data->page_offset);
+				  sw_rx_data->page_offset +
+				  rxq->rx_headroom);
 		if (ether_addr_equal(data_ptr,  edev->ndev->dev_addr) &&
 		    ether_addr_equal(data_ptr + ETH_ALEN,
 				     edev->ndev->dev_addr)) {
@@ -1803,6 +1818,7 @@ static const struct ethtool_ops qede_ethtool_ops = {
 
 	.get_tunable = qede_get_tunable,
 	.set_tunable = qede_set_tunable,
+	.flash_device = qede_flash_device,
 };
 
 static const struct ethtool_ops qede_vf_ethtool_ops = {

@@ -245,8 +245,9 @@ static int goldfish_tty_create_driver(void)
 	int ret;
 	struct tty_driver *tty;
 
-	goldfish_ttys = kzalloc(sizeof(*goldfish_ttys) *
-				goldfish_tty_line_count, GFP_KERNEL);
+	goldfish_ttys = kcalloc(goldfish_tty_line_count,
+				sizeof(*goldfish_ttys),
+				GFP_KERNEL);
 	if (goldfish_ttys == NULL) {
 		ret = -ENOMEM;
 		goto err_alloc_goldfish_ttys_failed;
@@ -433,6 +434,7 @@ static int goldfish_tty_remove(struct platform_device *pdev)
 	return 0;
 }
 
+#ifdef CONFIG_GOLDFISH_TTY_EARLY_CONSOLE
 static void gf_early_console_putchar(struct uart_port *port, int ch)
 {
 	__raw_writel(ch, port->membase);
@@ -456,6 +458,7 @@ static int __init gf_earlycon_setup(struct earlycon_device *device,
 }
 
 OF_EARLYCON_DECLARE(early_gf_tty, "google,goldfish-tty", gf_earlycon_setup);
+#endif
 
 static const struct of_device_id goldfish_tty_of_match[] = {
 	{ .compatible = "google,goldfish-tty", },

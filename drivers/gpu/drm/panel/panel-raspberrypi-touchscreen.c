@@ -221,7 +221,7 @@ static struct rpi_touchscreen *panel_to_ts(struct drm_panel *panel)
 	return container_of(panel, struct rpi_touchscreen, base);
 }
 
-static u8 rpi_touchscreen_i2c_read(struct rpi_touchscreen *ts, u8 reg)
+static int rpi_touchscreen_i2c_read(struct rpi_touchscreen *ts, u8 reg)
 {
 	return i2c_smbus_read_byte_data(ts->i2c, reg);
 }
@@ -238,12 +238,6 @@ static void rpi_touchscreen_i2c_write(struct rpi_touchscreen *ts,
 
 static int rpi_touchscreen_write(struct rpi_touchscreen *ts, u16 reg, u32 val)
 {
-#if 0
-	/* The firmware uses LP DSI transactions like this to bring up
-	 * the hardware, which should be faster than using I2C to then
-	 * pass to the Toshiba.  However, I was unable to get it to
-	 * work.
-	 */
 	u8 msg[] = {
 		reg,
 		reg >> 8,
@@ -253,13 +247,7 @@ static int rpi_touchscreen_write(struct rpi_touchscreen *ts, u16 reg, u32 val)
 		val >> 24,
 	};
 
-	mipi_dsi_dcs_write_buffer(ts->dsi, msg, sizeof(msg));
-#else
-	rpi_touchscreen_i2c_write(ts, REG_WR_ADDRH, reg >> 8);
-	rpi_touchscreen_i2c_write(ts, REG_WR_ADDRL, reg);
-	rpi_touchscreen_i2c_write(ts, REG_WRITEH, val >> 8);
-	rpi_touchscreen_i2c_write(ts, REG_WRITEL, val);
-#endif
+	mipi_dsi_generic_write(ts->dsi, msg, sizeof(msg));
 
 	return 0;
 }

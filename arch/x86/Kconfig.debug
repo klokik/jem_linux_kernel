@@ -72,6 +72,9 @@ config EARLY_PRINTK_USB_XDBC
 	  You should normally say N here, unless you want to debug early
 	  crashes or need a very simple printk logging facility.
 
+config MCSAFE_TEST
+	def_bool n
+
 config X86_PTDUMP_CORE
 	def_bool n
 
@@ -168,14 +171,6 @@ config IOMMU_DEBUG
 	  be set more finegrained using the iommu= command line
 	  options. See Documentation/x86/x86_64/boot-options.txt for more
 	  details.
-
-config IOMMU_STRESS
-	bool "Enable IOMMU stress-test mode"
-	---help---
-	  This option disables various optimizations in IOMMU related
-	  code to do real stress testing of the IOMMU code. This option
-	  will cause a performance drop and should only be enabled for
-	  testing.
 
 config IOMMU_LEAK
 	bool "IOMMU leak tracing"

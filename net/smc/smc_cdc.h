@@ -48,7 +48,7 @@ struct smc_cdc_msg {
 	struct smc_cdc_producer_flags	prod_flags;
 	struct smc_cdc_conn_state_flags	conn_state_flags;
 	u8				reserved[18];
-} __aligned(8);
+} __packed;					/* format defined in RFC7609 */
 
 static inline bool smc_cdc_rxed_any_close(struct smc_connection *conn)
 {
@@ -146,6 +146,19 @@ static inline int smc_curs_diff(unsigned int size,
 	return max_t(int, 0, (new->count - old->count));
 }
 
+/* calculate cursor difference between old and new - returns negative
+ * value in case old > new
+ */
+static inline int smc_curs_comp(unsigned int size,
+				union smc_host_cursor *old,
+				union smc_host_cursor *new)
+{
+	if (old->wrap > new->wrap ||
+	    (old->wrap == new->wrap && old->count > new->count))
+		return -smc_curs_diff(size, new, old);
+	return smc_curs_diff(size, old, new);
+}
+
 static inline void smc_host_cursor_to_cdc(union smc_cdc_cursor *peer,
 					  union smc_host_cursor *local,
 					  struct smc_connection *conn)
@@ -214,7 +227,6 @@ void smc_cdc_tx_dismiss_slots(struct smc_connection *conn);
 int smc_cdc_msg_send(struct smc_connection *conn, struct smc_wr_buf *wr_buf,
 		     struct smc_cdc_tx_pend *pend);
 int smc_cdc_get_slot_and_msg_send(struct smc_connection *conn);
-bool smc_cdc_tx_has_pending(struct smc_connection *conn);
 int smc_cdc_init(void) __init;
 
 #endif /* SMC_CDC_H */

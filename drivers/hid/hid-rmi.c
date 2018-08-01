@@ -89,8 +89,8 @@ struct rmi_data {
 	u8 *writeReport;
 	u8 *readReport;
 
-	int input_report_size;
-	int output_report_size;
+	u32 input_report_size;
+	u32 output_report_size;
 
 	unsigned long flags;
 
@@ -413,6 +413,24 @@ static int rmi_event(struct hid_device *hdev, struct hid_field *field,
 	return 0;
 }
 
+static void rmi_report(struct hid_device *hid, struct hid_report *report)
+{
+	struct hid_field *field = report->field[0];
+
+	if (!(hid->claimed & HID_CLAIMED_INPUT))
+		return;
+
+	switch (report->id) {
+	case RMI_READ_DATA_REPORT_ID:
+		/* fall-through */
+	case RMI_ATTN_REPORT_ID:
+		return;
+	}
+
+	if (field && field->hidinput && field->hidinput->input)
+		input_sync(field->hidinput->input);
+}
+
 #ifdef CONFIG_PM
 static int rmi_suspend(struct hid_device *hdev, pm_message_t message)
 {
@@ -637,6 +655,7 @@ static int rmi_probe(struct hid_device *hdev, const struct hid_device_id *id)
 	hid_set_drvdata(hdev, data);
 
 	hdev->quirks |= HID_QUIRK_NO_INIT_REPORTS;
+	hdev->quirks |= HID_QUIRK_NO_INPUT_SYNC;
 
 	ret = hid_parse(hdev);
 	if (ret) {
@@ -731,6 +750,7 @@ static const struct hid_device_id rmi_id[] = {
 	{ HID_USB_DEVICE(USB_VENDOR_ID_RAZER, USB_DEVICE_ID_RAZER_BLADE_14),
 		.driver_data = RMI_DEVICE_HAS_PHYS_BUTTONS },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_LENOVO, USB_DEVICE_ID_LENOVO_X1_COVER) },
+	{ HID_USB_DEVICE(USB_VENDOR_ID_PRIMAX, USB_DEVICE_ID_PRIMAX_REZEL) },
 	{ HID_DEVICE(HID_BUS_ANY, HID_GROUP_RMI, HID_ANY_ID, HID_ANY_ID) },
 	{ }
 };
@@ -743,6 +763,7 @@ static struct hid_driver rmi_driver = {
 	.remove			= rmi_remove,
 	.event			= rmi_event,
 	.raw_event		= rmi_raw_event,
+	.report			= rmi_report,
 	.input_mapping		= rmi_input_mapping,
 	.input_configured	= rmi_input_configured,
 #ifdef CONFIG_PM

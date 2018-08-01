@@ -297,7 +297,7 @@ mpt3sas_ctl_done(struct MPT3SAS_ADAPTER *ioc, u16 smid, u8 msix_index,
 			nvme_error_reply =
 			    (Mpi26NVMeEncapsulatedErrorReply_t *)mpi_reply;
 			sz = min_t(u32, NVME_ERROR_RESPONSE_SIZE,
-			    le32_to_cpu(nvme_error_reply->ErrorResponseCount));
+			    le16_to_cpu(nvme_error_reply->ErrorResponseCount));
 			sense_data = mpt3sas_base_get_sense_buffer(ioc, smid);
 			memcpy(ioc->ctl_cmds.sense, sense_data, sz);
 		}
@@ -534,7 +534,7 @@ _ctl_fasync(int fd, struct file *filep, int mode)
  * @wait -
  *
  */
-static unsigned int
+static __poll_t
 _ctl_poll(struct file *filep, poll_table *wait)
 {
 	struct MPT3SAS_ADAPTER *ioc;
@@ -546,7 +546,7 @@ _ctl_poll(struct file *filep, poll_table *wait)
 	list_for_each_entry(ioc, &mpt3sas_ioc_list, list) {
 		if (ioc->aen_event_read_flag) {
 			spin_unlock(&gioc_lock);
-			return POLLIN | POLLRDNORM;
+			return EPOLLIN | EPOLLRDNORM;
 		}
 	}
 	spin_unlock(&gioc_lock);
@@ -567,11 +567,10 @@ _ctl_set_task_mid(struct MPT3SAS_ADAPTER *ioc, struct mpt3_ioctl_command *karg,
 	Mpi2SCSITaskManagementRequest_t *tm_request)
 {
 	u8 found = 0;
-	u16 i;
+	u16 smid;
 	u16 handle;
 	struct scsi_cmnd *scmd;
 	struct MPT3SAS_DEVICE *priv_data;
-	unsigned long flags;
 	Mpi2SCSITaskManagementReply_t *tm_reply;
 	u32 sz;
 	u32 lun;
@@ -587,11 +586,11 @@ _ctl_set_task_mid(struct MPT3SAS_ADAPTER *ioc, struct mpt3_ioctl_command *karg,
 	lun = scsilun_to_int((struct scsi_lun *)tm_request->LUN);
 
 	handle = le16_to_cpu(tm_request->DevHandle);
-	spin_lock_irqsave(&ioc->scsi_lookup_lock, flags);
-	for (i = ioc->scsiio_depth; i && !found; i--) {
-		scmd = ioc->scsi_lookup[i - 1].scmd;
-		if (scmd == NULL || scmd->device == NULL ||
-		    scmd->device->hostdata == NULL)
+	for (smid = ioc->scsiio_depth; smid && !found; smid--) {
+		struct scsiio_tracker *st;
+
+		scmd = mpt3sas_scsih_scsi_lookup_get(ioc, smid);
+		if (!scmd)
 			continue;
 		if (lun != scmd->device->lun)
 			continue;
@@ -600,10 +599,10 @@ _ctl_set_task_mid(struct MPT3SAS_ADAPTER *ioc, struct mpt3_ioctl_command *karg,
 			continue;
 		if (priv_data->sas_target->handle != handle)
 			continue;
-		tm_request->TaskMID = cpu_to_le16(ioc->scsi_lookup[i - 1].smid);
+		st = scsi_cmd_priv(scmd);
+		tm_request->TaskMID = cpu_to_le16(st->smid);
 		found = 1;
 	}
-	spin_unlock_irqrestore(&ioc->scsi_lookup_lock, flags);
 
 	if (!found) {
 		dctlprintk(ioc, pr_info(MPT3SAS_FMT
@@ -645,9 +644,10 @@ _ctl_do_mpt_command(struct MPT3SAS_ADAPTER *ioc, struct mpt3_ioctl_command karg,
 	MPI2RequestHeader_t *mpi_request = NULL, *request;
 	MPI2DefaultReply_t *mpi_reply;
 	Mpi26NVMeEncapsulatedRequest_t *nvme_encap_request = NULL;
+	struct _pcie_device *pcie_device = NULL;
 	u32 ioc_state;
 	u16 smid;
-	unsigned long timeout;
+	u8 timeout;
 	u8 issue_reset;
 	u32 sz, sz_arg;
 	void *psge;
@@ -660,6 +660,7 @@ _ctl_do_mpt_command(struct MPT3SAS_ADAPTER *ioc, struct mpt3_ioctl_command karg,
 	long ret;
 	u16 wait_state_count;
 	u16 device_handle = MPT3SAS_INVALID_DEVICE_HANDLE;
+	u8 tr_method = MPI26_SCSITASKMGMT_MSGFLAGS_PROTOCOL_LVL_RST_PCIE;
 
 	issue_reset = 0;
 
@@ -724,14 +725,8 @@ _ctl_do_mpt_command(struct MPT3SAS_ADAPTER *ioc, struct mpt3_ioctl_command karg,
 			goto out;
 		}
 	} else {
-
-		smid = mpt3sas_base_get_smid_scsiio(ioc, ioc->ctl_cb_idx, NULL);
-		if (!smid) {
-			pr_err(MPT3SAS_FMT "%s: failed obtaining a smid\n",
-			    ioc->name, __func__);
-			ret = -EAGAIN;
-			goto out;
-		}
+		/* Use first reserved smid for passthrough ioctls */
+		smid = ioc->scsiio_depth - INTERNAL_SCSIIO_CMDS_COUNT + 1;
 	}
 
 	ret = 0;
@@ -810,12 +805,13 @@ _ctl_do_mpt_command(struct MPT3SAS_ADAPTER *ioc, struct mpt3_ioctl_command karg,
 		 * Build the PRPs and set direction bits.
 		 * Send the request.
 		 */
-		nvme_encap_request->ErrorResponseBaseAddress = ioc->sense_dma &
-		    0xFFFFFFFF00000000;
+		nvme_encap_request->ErrorResponseBaseAddress =
+		    cpu_to_le64(ioc->sense_dma & 0xFFFFFFFF00000000UL);
 		nvme_encap_request->ErrorResponseBaseAddress |=
-		    (U64)mpt3sas_base_get_sense_buffer_dma(ioc, smid);
+		   cpu_to_le64(le32_to_cpu(
+		   mpt3sas_base_get_sense_buffer_dma(ioc, smid)));
 		nvme_encap_request->ErrorResponseAllocationLength =
-						NVME_ERROR_RESPONSE_SIZE;
+					cpu_to_le16(NVME_ERROR_RESPONSE_SIZE);
 		memset(ioc->ctl_cmds.sense, 0, NVME_ERROR_RESPONSE_SIZE);
 		ioc->build_nvme_prp(ioc, smid, nvme_encap_request,
 		    data_out_dma, data_out_sz, data_in_dma, data_in_sz);
@@ -827,7 +823,7 @@ _ctl_do_mpt_command(struct MPT3SAS_ADAPTER *ioc, struct mpt3_ioctl_command karg,
 			ret = -EINVAL;
 			goto out;
 		}
-		ioc->put_smid_nvme_encap(ioc, smid);
+		mpt3sas_base_put_smid_nvme_encap(ioc, smid);
 		break;
 	}
 	case MPI2_FUNCTION_SCSI_IO_REQUEST:
@@ -852,7 +848,7 @@ _ctl_do_mpt_command(struct MPT3SAS_ADAPTER *ioc, struct mpt3_ioctl_command karg,
 		if (mpi_request->Function == MPI2_FUNCTION_SCSI_IO_REQUEST)
 			ioc->put_smid_scsi_io(ioc, smid, device_handle);
 		else
-			ioc->put_smid_default(ioc, smid);
+			mpt3sas_base_put_smid_default(ioc, smid);
 		break;
 	}
 	case MPI2_FUNCTION_SCSI_TASK_MGMT:
@@ -889,7 +885,7 @@ _ctl_do_mpt_command(struct MPT3SAS_ADAPTER *ioc, struct mpt3_ioctl_command karg,
 		    tm_request->DevHandle));
 		ioc->build_sg_mpi(ioc, psge, data_out_dma, data_out_sz,
 		    data_in_dma, data_in_sz);
-		ioc->put_smid_hi_priority(ioc, smid, 0);
+		mpt3sas_base_put_smid_hi_priority(ioc, smid, 0);
 		break;
 	}
 	case MPI2_FUNCTION_SMP_PASSTHROUGH:
@@ -920,7 +916,7 @@ _ctl_do_mpt_command(struct MPT3SAS_ADAPTER *ioc, struct mpt3_ioctl_command karg,
 		}
 		ioc->build_sg(ioc, psge, data_out_dma, data_out_sz, data_in_dma,
 		    data_in_sz);
-		ioc->put_smid_default(ioc, smid);
+		mpt3sas_base_put_smid_default(ioc, smid);
 		break;
 	}
 	case MPI2_FUNCTION_SATA_PASSTHROUGH:
@@ -935,7 +931,7 @@ _ctl_do_mpt_command(struct MPT3SAS_ADAPTER *ioc, struct mpt3_ioctl_command karg,
 		}
 		ioc->build_sg(ioc, psge, data_out_dma, data_out_sz, data_in_dma,
 		    data_in_sz);
-		ioc->put_smid_default(ioc, smid);
+		mpt3sas_base_put_smid_default(ioc, smid);
 		break;
 	}
 	case MPI2_FUNCTION_FW_DOWNLOAD:
@@ -943,7 +939,7 @@ _ctl_do_mpt_command(struct MPT3SAS_ADAPTER *ioc, struct mpt3_ioctl_command karg,
 	{
 		ioc->build_sg(ioc, psge, data_out_dma, data_out_sz, data_in_dma,
 		    data_in_sz);
-		ioc->put_smid_default(ioc, smid);
+		mpt3sas_base_put_smid_default(ioc, smid);
 		break;
 	}
 	case MPI2_FUNCTION_TOOLBOX:
@@ -958,7 +954,7 @@ _ctl_do_mpt_command(struct MPT3SAS_ADAPTER *ioc, struct mpt3_ioctl_command karg,
 			ioc->build_sg_mpi(ioc, psge, data_out_dma, data_out_sz,
 				data_in_dma, data_in_sz);
 		}
-		ioc->put_smid_default(ioc, smid);
+		mpt3sas_base_put_smid_default(ioc, smid);
 		break;
 	}
 	case MPI2_FUNCTION_SAS_IO_UNIT_CONTROL:
@@ -977,7 +973,7 @@ _ctl_do_mpt_command(struct MPT3SAS_ADAPTER *ioc, struct mpt3_ioctl_command karg,
 	default:
 		ioc->build_sg_mpi(ioc, psge, data_out_dma, data_out_sz,
 		    data_in_dma, data_in_sz);
-		ioc->put_smid_default(ioc, smid);
+		mpt3sas_base_put_smid_default(ioc, smid);
 		break;
 	}
 
@@ -1080,14 +1076,26 @@ _ctl_do_mpt_command(struct MPT3SAS_ADAPTER *ioc, struct mpt3_ioctl_command karg,
 				ioc->name,
 				le16_to_cpu(mpi_request->FunctionDependent1));
 			mpt3sas_halt_firmware(ioc);
-			mpt3sas_scsih_issue_locked_tm(ioc,
-			    le16_to_cpu(mpi_request->FunctionDependent1), 0, 0,
-			    0, MPI2_SCSITASKMGMT_TASKTYPE_TARGET_RESET, 0, 30);
+			pcie_device = mpt3sas_get_pdev_by_handle(ioc,
+				le16_to_cpu(mpi_request->FunctionDependent1));
+			if (pcie_device && (!ioc->tm_custom_handling))
+				mpt3sas_scsih_issue_locked_tm(ioc,
+				  le16_to_cpu(mpi_request->FunctionDependent1),
+				  0, MPI2_SCSITASKMGMT_TASKTYPE_TARGET_RESET, 0,
+				  0, pcie_device->reset_timeout,
+				  tr_method);
+			else
+				mpt3sas_scsih_issue_locked_tm(ioc,
+				  le16_to_cpu(mpi_request->FunctionDependent1),
+				  0, MPI2_SCSITASKMGMT_TASKTYPE_TARGET_RESET, 0,
+				  0, 30, MPI2_SCSITASKMGMT_MSGFLAGS_LINK_RESET);
 		} else
 			mpt3sas_base_hard_reset_handler(ioc, FORCE_BIG_HAMMER);
 	}
 
  out:
+	if (pcie_device)
+		pcie_device_put(pcie_device);
 
 	/* free memory associated with sg buffers */
 	if (data_in)
@@ -1608,7 +1616,7 @@ _ctl_diag_register_2(struct MPT3SAS_ADAPTER *ioc,
 			cpu_to_le32(ioc->product_specific[buffer_type][i]);
 
 	init_completion(&ioc->ctl_cmds.done);
-	ioc->put_smid_default(ioc, smid);
+	mpt3sas_base_put_smid_default(ioc, smid);
 	wait_for_completion_timeout(&ioc->ctl_cmds.done,
 	    MPT3_IOCTL_DEFAULT_TIMEOUT*HZ);
 
@@ -1955,7 +1963,7 @@ mpt3sas_send_diag_release(struct MPT3SAS_ADAPTER *ioc, u8 buffer_type,
 	mpi_request->VP_ID = 0;
 
 	init_completion(&ioc->ctl_cmds.done);
-	ioc->put_smid_default(ioc, smid);
+	mpt3sas_base_put_smid_default(ioc, smid);
 	wait_for_completion_timeout(&ioc->ctl_cmds.done,
 	    MPT3_IOCTL_DEFAULT_TIMEOUT*HZ);
 
@@ -2222,7 +2230,7 @@ _ctl_diag_read_buffer(struct MPT3SAS_ADAPTER *ioc, void __user *arg)
 	mpi_request->VP_ID = 0;
 
 	init_completion(&ioc->ctl_cmds.done);
-	ioc->put_smid_default(ioc, smid);
+	mpt3sas_base_put_smid_default(ioc, smid);
 	wait_for_completion_timeout(&ioc->ctl_cmds.done,
 	    MPT3_IOCTL_DEFAULT_TIMEOUT*HZ);
 

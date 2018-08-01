@@ -353,7 +353,7 @@ fail_ctrl_tx:
 	return status;
 }
 
-int ath6kl_data_tx(struct sk_buff *skb, struct net_device *dev)
+netdev_tx_t ath6kl_data_tx(struct sk_buff *skb, struct net_device *dev)
 {
 	struct ath6kl *ar = ath6kl_priv(dev);
 	struct ath6kl_cookie *cookie = NULL;
@@ -1001,7 +1001,7 @@ static void aggr_slice_amsdu(struct aggr_info *p_aggr,
 
 	while (amsdu_len > mac_hdr_len) {
 		hdr = (struct ethhdr *) framep;
-		payload_8023_len = ntohs(hdr->h_proto);
+		payload_8023_len = be16_to_cpu(hdr->h_proto);
 
 		if (payload_8023_len < MIN_MSDU_SUBFRAME_PAYLOAD_LEN ||
 		    payload_8023_len > MAX_MSDU_SUBFRAME_PAYLOAD_LEN) {

@@ -271,7 +271,8 @@ static int camss_of_parse_endpoint_node(struct device *dev,
 	lncfg->clk.pol = mipi_csi2->lane_polarities[0];
 	lncfg->num_data = mipi_csi2->num_data_lanes;
 
-	lncfg->data = devm_kzalloc(dev, lncfg->num_data * sizeof(*lncfg->data),
+	lncfg->data = devm_kcalloc(dev,
+				   lncfg->num_data, sizeof(*lncfg->data),
 				   GFP_KERNEL);
 	if (!lncfg->data)
 		return -ENOMEM;
@@ -341,7 +342,7 @@ static int camss_of_parse_ports(struct device *dev,
 		}
 
 		csd->asd.match_type = V4L2_ASYNC_MATCH_FWNODE;
-		csd->asd.match.fwnode.fwnode = of_fwnode_handle(remote);
+		csd->asd.match.fwnode = of_fwnode_handle(remote);
 	}
 
 	return notifier->num_subdevs;

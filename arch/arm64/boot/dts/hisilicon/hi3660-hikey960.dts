@@ -109,6 +109,7 @@
 			label = "user_led4";
 			/* gpio_190_user_led4 */
 			gpios = <&gpio23 6 0>;
+			panic-indicator;
 			linux,default-trigger = "cpu0";
 		};
 
@@ -584,6 +585,8 @@
 	vmmc-supply = <&wlan_en>;
 	ti,non-removable;
 	non-removable;
+	cap-power-off-card;
+	keep-power-in-suspend;
 	#address-cells = <0x1>;
 	#size-cells = <0x0>;
 	status = "ok";

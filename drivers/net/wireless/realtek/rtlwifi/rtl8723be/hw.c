@@ -43,6 +43,7 @@
 #include "../pwrseqcmd.h"
 #include "pwrseq.h"
 #include "../btcoexist/rtl_btc.h"
+#include <linux/kernel.h>
 
 #define LLT_CONFIG	5
 
@@ -847,6 +848,9 @@ static bool _rtl8723be_init_mac(struct ieee80211_hw *hw)
 		return false;
 	}
 
+	if (rtlpriv->cfg->ops->get_btc_status())
+		rtlpriv->btcoexist.btc_ops->btc_power_on_setting(rtlpriv);
+
 	bytetmp = rtl_read_byte(rtlpriv, REG_MULTI_FUNC_CTRL);
 	rtl_write_byte(rtlpriv, REG_MULTI_FUNC_CTRL, bytetmp | BIT(3));
 
@@ -1124,7 +1128,8 @@ static void _rtl8723be_enable_aspm_back_door(struct ieee80211_hw *hw)
 
 	/* Configuration Space offset 0x70f BIT7 is used to control L0S */
 	tmp8 = _rtl8723be_dbi_read(rtlpriv, 0x70f);
-	_rtl8723be_dbi_write(rtlpriv, 0x70f, tmp8 | BIT(7));
+	_rtl8723be_dbi_write(rtlpriv, 0x70f, tmp8 | BIT(7) |
+			     ASPM_L1_LATENCY << 3);
 
 	/* Configuration Space offset 0x719 Bit3 is for L1
 	 * BIT4 is for clock request
@@ -1682,18 +1687,17 @@ void rtl8723be_card_disable(struct ieee80211_hw *hw)
 }
 
 void rtl8723be_interrupt_recognized(struct ieee80211_hw *hw,
-				    u32 *p_inta, u32 *p_intb,
-				    u32 *p_intc, u32 *p_intd)
+				    struct rtl_int *intvec)
 {
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
 	struct rtl_pci *rtlpci = rtl_pcidev(rtl_pcipriv(hw));
 
-	*p_inta = rtl_read_dword(rtlpriv, ISR) & rtlpci->irq_mask[0];
-	rtl_write_dword(rtlpriv, ISR, *p_inta);
+	intvec->inta = rtl_read_dword(rtlpriv, ISR) & rtlpci->irq_mask[0];
+	rtl_write_dword(rtlpriv, ISR, intvec->inta);
 
-	*p_intb = rtl_read_dword(rtlpriv, REG_HISRE) &
-					rtlpci->irq_mask[1];
-	rtl_write_dword(rtlpriv, REG_HISRE, *p_intb);
+	intvec->intb = rtl_read_dword(rtlpriv, REG_HISRE) &
+				      rtlpci->irq_mask[1];
+	rtl_write_dword(rtlpriv, REG_HISRE, intvec->intb);
 }
 
 void rtl8723be_set_beacon_related_registers(struct ieee80211_hw *hw)
@@ -2127,28 +2131,28 @@ static void _rtl8723be_read_adapter_info(struct ieee80211_hw *hw,
 
 	if (rtlhal->oem_id == RT_CID_DEFAULT) {
 		/* Does this one have a Toshiba SMID from group 1? */
-		for (i = 0; i < sizeof(toshiba_smid1) / sizeof(u16); i++) {
+		for (i = 0; i < ARRAY_SIZE(toshiba_smid1); i++) {
 			if (rtlefuse->eeprom_smid == toshiba_smid1[i]) {
 				is_toshiba_smid1 = true;
 				break;
 			}
 		}
 		/* Does this one have a Toshiba SMID from group 2? */
-		for (i = 0; i < sizeof(toshiba_smid2) / sizeof(u16); i++) {
+		for (i = 0; i < ARRAY_SIZE(toshiba_smid2); i++) {
 			if (rtlefuse->eeprom_smid == toshiba_smid2[i]) {
 				is_toshiba_smid2 = true;
 				break;
 			}
 		}
 		/* Does this one have a Samsung SMID? */
-		for (i = 0; i < sizeof(samsung_smid) / sizeof(u16); i++) {
+		for (i = 0; i < ARRAY_SIZE(samsung_smid); i++) {
 			if (rtlefuse->eeprom_smid == samsung_smid[i]) {
 				is_samsung_smid = true;
 				break;
 			}
 		}
 		/* Does this one have a Lenovo SMID? */
-		for (i = 0; i < sizeof(lenovo_smid) / sizeof(u16); i++) {
+		for (i = 0; i < ARRAY_SIZE(lenovo_smid); i++) {
 			if (rtlefuse->eeprom_smid == lenovo_smid[i]) {
 				is_lenovo_smid = true;
 				break;
@@ -2695,21 +2699,21 @@ void rtl8723be_read_bt_coexist_info_from_hwpg(struct ieee80211_hw *hw,
 		rtlpriv->btcoexist.btc_info.bt_type = BT_RTL8723B;
 		rtlpriv->btcoexist.btc_info.ant_num = (value & 0x1);
 		rtlpriv->btcoexist.btc_info.single_ant_path =
-			 (value & 0x40);	/*0xc3[6]*/
+			 (value & 0x40 ? ANT_AUX : ANT_MAIN);	/*0xc3[6]*/
 	} else {
 		rtlpriv->btcoexist.btc_info.btcoexist = 0;
 		rtlpriv->btcoexist.btc_info.bt_type = BT_RTL8723B;
 		rtlpriv->btcoexist.btc_info.ant_num = ANT_X2;
-		rtlpriv->btcoexist.btc_info.single_ant_path = 0;
+		rtlpriv->btcoexist.btc_info.single_ant_path = ANT_MAIN;
 	}
 
 	/* override ant_num / ant_path */
 	if (mod_params->ant_sel) {
 		rtlpriv->btcoexist.btc_info.ant_num =
-			(mod_params->ant_sel == 1 ? ANT_X2 : ANT_X1);
+			(mod_params->ant_sel == 1 ? ANT_X1 : ANT_X2);
 
 		rtlpriv->btcoexist.btc_info.single_ant_path =
-			(mod_params->ant_sel == 1 ? 0 : 1);
+			(mod_params->ant_sel == 1 ? ANT_AUX : ANT_MAIN);
 	}
 }
 

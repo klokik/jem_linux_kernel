@@ -228,6 +228,7 @@ void dm_stats_cleanup(struct dm_stats *stats)
 		dm_stat_free(&s->rcu_head);
 	}
 	free_percpu(stats->last);
+	mutex_destroy(&stats->mutex);
 }
 
 static int dm_stats_create(struct dm_stats *stats, sector_t start, sector_t end,
@@ -914,7 +915,9 @@ static int parse_histogram(const char *h, unsigned *n_histogram_entries,
 		if (*q == ',')
 			(*n_histogram_entries)++;
 
-	*histogram_boundaries = kmalloc(*n_histogram_entries * sizeof(unsigned long long), GFP_KERNEL);
+	*histogram_boundaries = kmalloc_array(*n_histogram_entries,
+					      sizeof(unsigned long long),
+					      GFP_KERNEL);
 	if (!*histogram_boundaries)
 		return -ENOMEM;
 

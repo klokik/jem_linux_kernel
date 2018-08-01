@@ -72,8 +72,7 @@
  * struct cros_ec_spi - information about a SPI-connected EC
  *
  * @spi: SPI device we are connected to
- * @last_transfer_ns: time that we last finished a transfer, or 0 if there
- *	if no record
+ * @last_transfer_ns: time that we last finished a transfer.
  * @start_of_msg_delay: used to set the delay_usecs on the spi_transfer that
  *      is sent when we want to turn on CS at the start of a transaction.
  * @end_of_msg_delay: used to set the delay_usecs on the spi_transfer that
@@ -379,18 +378,15 @@ static int cros_ec_pkt_xfer_spi(struct cros_ec_device *ec_dev,
 	u8 sum;
 	u8 rx_byte;
 	int ret = 0, final_ret;
+	unsigned long delay;
 
 	len = cros_ec_prepare_tx(ec_dev, ec_msg);
 	dev_dbg(ec_dev->dev, "prepared, len=%d\n", len);
 
 	/* If it's too soon to do another transaction, wait */
-	if (ec_spi->last_transfer_ns) {
-		unsigned long delay;	/* The delay completed so far */
-
-		delay = ktime_get_ns() - ec_spi->last_transfer_ns;
-		if (delay < EC_SPI_RECOVERY_TIME_NS)
-			ndelay(EC_SPI_RECOVERY_TIME_NS - delay);
-	}
+	delay = ktime_get_ns() - ec_spi->last_transfer_ns;
+	if (delay < EC_SPI_RECOVERY_TIME_NS)
+		ndelay(EC_SPI_RECOVERY_TIME_NS - delay);
 
 	rx_buf = kzalloc(len, GFP_KERNEL);
 	if (!rx_buf)
@@ -423,10 +419,25 @@ static int cros_ec_pkt_xfer_spi(struct cros_ec_device *ec_dev,
 		/* Verify that EC can process command */
 		for (i = 0; i < len; i++) {
 			rx_byte = rx_buf[i];
+			/*
+			 * Seeing the PAST_END, RX_BAD_DATA, or NOT_READY
+			 * markers are all signs that the EC didn't fully
+			 * receive our command. e.g., if the EC is flashing
+			 * itself, it can't respond to any commands and instead
+			 * clocks out EC_SPI_PAST_END from its SPI hardware
+			 * buffer. Similar occurrences can happen if the AP is
+			 * too slow to clock out data after asserting CS -- the
+			 * EC will abort and fill its buffer with
+			 * EC_SPI_RX_BAD_DATA.
+			 *
+			 * In all cases, these errors should be safe to retry.
+			 * Report -EAGAIN and let the caller decide what to do
+			 * about that.
+			 */
 			if (rx_byte == EC_SPI_PAST_END  ||
 			    rx_byte == EC_SPI_RX_BAD_DATA ||
 			    rx_byte == EC_SPI_NOT_READY) {
-				ret = -EREMOTEIO;
+				ret = -EAGAIN;
 				break;
 			}
 		}
@@ -435,7 +446,7 @@ static int cros_ec_pkt_xfer_spi(struct cros_ec_device *ec_dev,
 	if (!ret)
 		ret = cros_ec_spi_receive_packet(ec_dev,
 				ec_msg->insize + sizeof(*response));
-	else
+	else if (ret != -EAGAIN)
 		dev_err(ec_dev->dev, "spi transfer failed: %d\n", ret);
 
 	final_ret = terminate_request(ec_dev);
@@ -509,18 +520,15 @@ static int cros_ec_cmd_xfer_spi(struct cros_ec_device *ec_dev,
 	u8 rx_byte;
 	int sum;
 	int ret = 0, final_ret;
+	unsigned long delay;
 
 	len = cros_ec_prepare_tx(ec_dev, ec_msg);
 	dev_dbg(ec_dev->dev, "prepared, len=%d\n", len);
 
 	/* If it's too soon to do another transaction, wait */
-	if (ec_spi->last_transfer_ns) {
-		unsigned long delay;	/* The delay completed so far */
-
-		delay = ktime_get_ns() - ec_spi->last_transfer_ns;
-		if (delay < EC_SPI_RECOVERY_TIME_NS)
-			ndelay(EC_SPI_RECOVERY_TIME_NS - delay);
-	}
+	delay = ktime_get_ns() - ec_spi->last_transfer_ns;
+	if (delay < EC_SPI_RECOVERY_TIME_NS)
+		ndelay(EC_SPI_RECOVERY_TIME_NS - delay);
 
 	rx_buf = kzalloc(len, GFP_KERNEL);
 	if (!rx_buf)
@@ -544,10 +552,11 @@ static int cros_ec_cmd_xfer_spi(struct cros_ec_device *ec_dev,
 		/* Verify that EC can process command */
 		for (i = 0; i < len; i++) {
 			rx_byte = rx_buf[i];
+			/* See comments in cros_ec_pkt_xfer_spi() */
 			if (rx_byte == EC_SPI_PAST_END  ||
 			    rx_byte == EC_SPI_RX_BAD_DATA ||
 			    rx_byte == EC_SPI_NOT_READY) {
-				ret = -EREMOTEIO;
+				ret = -EAGAIN;
 				break;
 			}
 		}
@@ -556,7 +565,7 @@ static int cros_ec_cmd_xfer_spi(struct cros_ec_device *ec_dev,
 	if (!ret)
 		ret = cros_ec_spi_receive_response(ec_dev,
 				ec_msg->insize + EC_MSG_TX_PROTO_BYTES);
-	else
+	else if (ret != -EAGAIN)
 		dev_err(ec_dev->dev, "spi transfer failed: %d\n", ret);
 
 	final_ret = terminate_request(ec_dev);

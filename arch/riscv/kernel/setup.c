@@ -29,6 +29,7 @@
 #include <linux/of_fdt.h>
 #include <linux/of_platform.h>
 #include <linux/sched/task.h>
+#include <linux/swiotlb.h>
 
 #include <asm/setup.h>
 #include <asm/sections.h>
@@ -48,10 +49,6 @@ struct screen_info screen_info = {
 	.orig_video_points	= 8
 };
 #endif
-
-#ifdef CONFIG_CMDLINE_BOOL
-static char __initdata builtin_cmdline[COMMAND_LINE_SIZE] = CONFIG_CMDLINE;
-#endif /* CONFIG_CMDLINE_BOOL */
 
 unsigned long va_pa_offset;
 EXPORT_SYMBOL(va_pa_offset);
@@ -148,29 +145,10 @@ asmlinkage void __init setup_vm(void)
 #endif
 }
 
-void __init sbi_save(unsigned int hartid, void *dtb)
+void __init parse_dtb(unsigned int hartid, void *dtb)
 {
 	early_init_dt_scan(__va(dtb));
 }
-
-/*
- * Allow the user to manually add a memory region (in case DTS is broken);
- * "mem_end=nn[KkMmGg]"
- */
-static int __init mem_end_override(char *p)
-{
-	resource_size_t base, end;
-
-	if (!p)
-		return -EINVAL;
-	base = (uintptr_t) __pa(PAGE_OFFSET);
-	end = memparse(p, &p) & PMD_MASK;
-	if (end == 0)
-		return -EINVAL;
-	memblock_add(base, end - base);
-	return 0;
-}
-early_param("mem_end", mem_end_override);
 
 static void __init setup_bootmem(void)
 {
@@ -204,22 +182,19 @@ static void __init setup_bootmem(void)
 	early_init_fdt_scan_reserved_mem();
 	memblock_allow_resize();
 	memblock_dump_all();
+
+	for_each_memblock(memory, reg) {
+		unsigned long start_pfn = memblock_region_memory_base_pfn(reg);
+		unsigned long end_pfn = memblock_region_memory_end_pfn(reg);
+
+		memblock_set_node(PFN_PHYS(start_pfn),
+		                  PFN_PHYS(end_pfn - start_pfn),
+		                  &memblock.memory, 0);
+	}
 }
 
 void __init setup_arch(char **cmdline_p)
 {
-#ifdef CONFIG_CMDLINE_BOOL
-#ifdef CONFIG_CMDLINE_OVERRIDE
-	strlcpy(boot_command_line, builtin_cmdline, COMMAND_LINE_SIZE);
-#else
-	if (builtin_cmdline[0] != '\0') {
-		/* Append bootloader command line to built-in */
-		strlcat(builtin_cmdline, " ", COMMAND_LINE_SIZE);
-		strlcat(builtin_cmdline, boot_command_line, COMMAND_LINE_SIZE);
-		strlcpy(boot_command_line, builtin_cmdline, COMMAND_LINE_SIZE);
-	}
-#endif /* CONFIG_CMDLINE_OVERRIDE */
-#endif /* CONFIG_CMDLINE_BOOL */
 	*cmdline_p = boot_command_line;
 
 	parse_early_param();
@@ -232,6 +207,7 @@ void __init setup_arch(char **cmdline_p)
 	setup_bootmem();
 	paging_init();
 	unflatten_device_tree();
+	swiotlb_init(1);
 
 #ifdef CONFIG_SMP
 	setup_smp();
@@ -244,8 +220,3 @@ void __init setup_arch(char **cmdline_p)
 	riscv_fill_hwcap();
 }
 
-static int __init riscv_device_init(void)
-{
-	return of_platform_populate(NULL, of_default_bus_match_table, NULL, NULL);
-}
-subsys_initcall_sync(riscv_device_init);

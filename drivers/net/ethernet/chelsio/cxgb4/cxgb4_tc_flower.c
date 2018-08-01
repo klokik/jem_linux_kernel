@@ -43,7 +43,7 @@
 
 #define STATS_CHECK_PERIOD (HZ / 2)
 
-struct ch_tc_pedit_fields pedits[] = {
+static struct ch_tc_pedit_fields pedits[] = {
 	PEDIT_FIELDS(ETH_, DMAC_31_0, 4, dmac, 0),
 	PEDIT_FIELDS(ETH_, DMAC_47_32, 2, dmac, 4),
 	PEDIT_FIELDS(ETH_, SMAC_15_0, 2, smac, 0),
@@ -110,6 +110,9 @@ static void cxgb4_process_flow_match(struct net_device *dev,
 			ethtype_key = 0;
 			ethtype_mask = 0;
 		}
+
+		if (ethtype_key == ETH_P_IPV6)
+			fs->type = 1;
 
 		fs->val.ethtype = ethtype_key;
 		fs->mask.ethtype = ethtype_mask;
@@ -191,6 +194,23 @@ static void cxgb4_process_flow_match(struct net_device *dev,
 		fs->mask.tos = mask->tos;
 	}
 
+	if (dissector_uses_key(cls->dissector, FLOW_DISSECTOR_KEY_ENC_KEYID)) {
+		struct flow_dissector_key_keyid *key, *mask;
+
+		key = skb_flow_dissector_target(cls->dissector,
+						FLOW_DISSECTOR_KEY_ENC_KEYID,
+						cls->key);
+		mask = skb_flow_dissector_target(cls->dissector,
+						 FLOW_DISSECTOR_KEY_ENC_KEYID,
+						 cls->mask);
+		fs->val.vni = be32_to_cpu(key->keyid);
+		fs->mask.vni = be32_to_cpu(mask->keyid);
+		if (fs->mask.vni) {
+			fs->val.encap_vld = 1;
+			fs->mask.encap_vld = 1;
+		}
+	}
+
 	if (dissector_uses_key(cls->dissector, FLOW_DISSECTOR_KEY_VLAN)) {
 		struct flow_dissector_key_vlan *key, *mask;
 		u16 vlan_tci, vlan_tci_mask;
@@ -205,8 +225,8 @@ static void cxgb4_process_flow_match(struct net_device *dev,
 					   VLAN_PRIO_SHIFT);
 		vlan_tci_mask = mask->vlan_id | (mask->vlan_priority <<
 						 VLAN_PRIO_SHIFT);
-		fs->val.ivlan = cpu_to_be16(vlan_tci);
-		fs->mask.ivlan = cpu_to_be16(vlan_tci_mask);
+		fs->val.ivlan = vlan_tci;
+		fs->mask.ivlan = vlan_tci_mask;
 
 		/* Chelsio adapters use ivlan_vld bit to match vlan packets
 		 * as 802.1Q. Also, when vlan tag is present in packets,
@@ -244,6 +264,7 @@ static int cxgb4_validate_flow_match(struct net_device *dev,
 	      BIT(FLOW_DISSECTOR_KEY_IPV4_ADDRS) |
 	      BIT(FLOW_DISSECTOR_KEY_IPV6_ADDRS) |
 	      BIT(FLOW_DISSECTOR_KEY_PORTS) |
+	      BIT(FLOW_DISSECTOR_KEY_ENC_KEYID) |
 	      BIT(FLOW_DISSECTOR_KEY_VLAN) |
 	      BIT(FLOW_DISSECTOR_KEY_IP))) {
 		netdev_warn(dev, "Unsupported key used: 0x%x\n",
@@ -405,9 +426,7 @@ static void cxgb4_process_flow_actions(struct net_device *in,
 		} else if (is_tcf_gact_shot(a)) {
 			fs->action = FILTER_DROP;
 		} else if (is_tcf_mirred_egress_redirect(a)) {
-			int ifindex = tcf_mirred_ifindex(a);
-			struct net_device *out = __dev_get_by_index(dev_net(in),
-								    ifindex);
+			struct net_device *out = tcf_mirred_dev(a);
 			struct port_info *pi = netdev_priv(out);
 
 			fs->action = FILTER_SWITCH;
@@ -582,14 +601,14 @@ static int cxgb4_validate_flow_actions(struct net_device *dev,
 			/* Do nothing */
 		} else if (is_tcf_mirred_egress_redirect(a)) {
 			struct adapter *adap = netdev2adap(dev);
-			struct net_device *n_dev;
-			unsigned int i, ifindex;
+			struct net_device *n_dev, *target_dev;
+			unsigned int i;
 			bool found = false;
 
-			ifindex = tcf_mirred_ifindex(a);
+			target_dev = tcf_mirred_dev(a);
 			for_each_port(adap, i) {
 				n_dev = adap->port[i];
-				if (ifindex == n_dev->ifindex) {
+				if (target_dev == n_dev) {
 					found = true;
 					break;
 				}
@@ -765,9 +784,7 @@ static void ch_flower_stats_handler(struct work_struct *work)
 
 	rhashtable_walk_enter(&adap->flower_tbl, &iter);
 	do {
-		flower_entry = ERR_PTR(rhashtable_walk_start(&iter));
-		if (IS_ERR(flower_entry))
-			goto walk_stop;
+		rhashtable_walk_start(&iter);
 
 		while ((flower_entry = rhashtable_walk_next(&iter)) &&
 		       !IS_ERR(flower_entry)) {
@@ -786,8 +803,9 @@ static void ch_flower_stats_handler(struct work_struct *work)
 				spin_unlock(&flower_entry->lock);
 			}
 		}
-walk_stop:
+
 		rhashtable_walk_stop(&iter);
+
 	} while (flower_entry == ERR_PTR(-EAGAIN));
 	rhashtable_walk_exit(&iter);
 	mod_timer(&adap->flower_stats_timer, jiffies + STATS_CHECK_PERIOD);

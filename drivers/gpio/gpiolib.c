@@ -61,6 +61,11 @@ static struct bus_type gpio_bus_type = {
 	.name = "gpio",
 };
 
+/*
+ * Number of GPIOs to use for the fast path in set array
+ */
+#define FASTPATH_NGPIO CONFIG_GPIOLIB_FASTPATH_LIMIT
+
 /* gpio_lock prevents conflicts during gpio_desc[] table updates.
  * While any GPIO is requested, its gpio_chip is not removable;
  * each GPIO's "requested" flag serves as a lock and refcount.
@@ -70,6 +75,9 @@ DEFINE_SPINLOCK(gpio_lock);
 static DEFINE_MUTEX(gpio_lookup_lock);
 static LIST_HEAD(gpio_lookup_list);
 LIST_HEAD(gpio_devices);
+
+static DEFINE_MUTEX(gpio_machine_hogs_mutex);
+static LIST_HEAD(gpio_machine_hogs);
 
 static void gpiochip_free_hogs(struct gpio_chip *chip);
 static int gpiochip_add_irqchip(struct gpio_chip *gpiochip,
@@ -162,7 +170,7 @@ EXPORT_SYMBOL_GPL(desc_to_gpio);
  */
 struct gpio_chip *gpiod_to_chip(const struct gpio_desc *desc)
 {
-	if (!desc || !desc->gdev || !desc->gdev->chip)
+	if (!desc || !desc->gdev)
 		return NULL;
 	return desc->gdev->chip;
 }
@@ -196,7 +204,7 @@ static int gpiochip_find_base(int ngpio)
  * gpiod_get_direction - return the current direction of a GPIO
  * @desc:	GPIO to get the direction of
  *
- * Return GPIOF_DIR_IN or GPIOF_DIR_OUT, or an error code in case of error.
+ * Returns 0 for output, 1 for input, or an error code in case of error.
  *
  * This function may sleep if gpiod_cansleep() is true.
  */
@@ -337,6 +345,57 @@ static int gpiochip_set_desc_names(struct gpio_chip *gc)
 	return 0;
 }
 
+static unsigned long *gpiochip_allocate_mask(struct gpio_chip *chip)
+{
+	unsigned long *p;
+
+	p = kmalloc_array(BITS_TO_LONGS(chip->ngpio), sizeof(*p), GFP_KERNEL);
+	if (!p)
+		return NULL;
+
+	/* Assume by default all GPIOs are valid */
+	bitmap_fill(p, chip->ngpio);
+
+	return p;
+}
+
+static int gpiochip_init_valid_mask(struct gpio_chip *gpiochip)
+{
+#ifdef CONFIG_OF_GPIO
+	int size;
+	struct device_node *np = gpiochip->of_node;
+
+	size = of_property_count_u32_elems(np,  "gpio-reserved-ranges");
+	if (size > 0 && size % 2 == 0)
+		gpiochip->need_valid_mask = true;
+#endif
+
+	if (!gpiochip->need_valid_mask)
+		return 0;
+
+	gpiochip->valid_mask = gpiochip_allocate_mask(gpiochip);
+	if (!gpiochip->valid_mask)
+		return -ENOMEM;
+
+	return 0;
+}
+
+static void gpiochip_free_valid_mask(struct gpio_chip *gpiochip)
+{
+	kfree(gpiochip->valid_mask);
+	gpiochip->valid_mask = NULL;
+}
+
+bool gpiochip_line_is_valid(const struct gpio_chip *gpiochip,
+				unsigned int offset)
+{
+	/* No mask means all valid */
+	if (likely(!gpiochip->valid_mask))
+		return true;
+	return test_bit(offset, gpiochip->valid_mask);
+}
+EXPORT_SYMBOL_GPL(gpiochip_line_is_valid);
+
 /*
  * GPIO line handle management
  */
@@ -399,12 +458,11 @@ static long linehandle_ioctl(struct file *filep, unsigned int cmd,
 			vals[i] = !!ghd.values[i];
 
 		/* Reuse the array setting function */
-		gpiod_set_array_value_complex(false,
+		return gpiod_set_array_value_complex(false,
 					      true,
 					      lh->numdescs,
 					      lh->descs,
 					      vals);
-		return 0;
 	}
 	return -EINVAL;
 }
@@ -446,7 +504,7 @@ static int linehandle_create(struct gpio_device *gdev, void __user *ip)
 	struct gpiohandle_request handlereq;
 	struct linehandle_state *lh;
 	struct file *file;
-	int fd, i, ret;
+	int fd, i, count = 0, ret;
 	u32 lflags;
 
 	if (copy_from_user(&handlereq, ip, sizeof(handlereq)))
@@ -458,6 +516,15 @@ static int linehandle_create(struct gpio_device *gdev, void __user *ip)
 
 	/* Return an error if an unknown flag is set */
 	if (lflags & ~GPIOHANDLE_REQUEST_VALID_FLAGS)
+		return -EINVAL;
+
+	/*
+	 * Do not allow OPEN_SOURCE & OPEN_DRAIN flags in a single request. If
+	 * the hardware actually supports enabling both at the same time the
+	 * electrical result would be disastrous.
+	 */
+	if ((lflags & GPIOHANDLE_REQUEST_OPEN_DRAIN) &&
+	    (lflags & GPIOHANDLE_REQUEST_OPEN_SOURCE))
 		return -EINVAL;
 
 	/* OPEN_DRAIN and OPEN_SOURCE flags only make sense for output mode. */
@@ -498,6 +565,7 @@ static int linehandle_create(struct gpio_device *gdev, void __user *ip)
 		if (ret)
 			goto out_free_descs;
 		lh->descs[i] = desc;
+		count = i;
 
 		if (lflags & GPIOHANDLE_REQUEST_ACTIVE_LOW)
 			set_bit(FLAG_ACTIVE_LOW, &desc->flags);
@@ -505,6 +573,10 @@ static int linehandle_create(struct gpio_device *gdev, void __user *ip)
 			set_bit(FLAG_OPEN_DRAIN, &desc->flags);
 		if (lflags & GPIOHANDLE_REQUEST_OPEN_SOURCE)
 			set_bit(FLAG_OPEN_SOURCE, &desc->flags);
+
+		ret = gpiod_set_transitory(desc, false);
+		if (ret < 0)
+			goto out_free_descs;
 
 		/*
 		 * Lines have to be requested explicitly for input
@@ -564,7 +636,7 @@ static int linehandle_create(struct gpio_device *gdev, void __user *ip)
 out_put_unused_fd:
 	put_unused_fd(fd);
 out_free_descs:
-	for (; i >= 0; i--)
+	for (i = 0; i < count; i++)
 		gpiod_free(lh->descs[i]);
 	kfree(lh->label);
 out_free_lh:
@@ -588,6 +660,9 @@ out_free_lh:
  * @events: KFIFO for the GPIO events
  * @read_lock: mutex lock to protect reads from colliding with adding
  * new events to the FIFO
+ * @timestamp: cache for the timestamp storing it between hardirq
+ * and IRQ thread, used to bring the timestamp close to the actual
+ * event
  */
 struct lineevent_state {
 	struct gpio_device *gdev;
@@ -598,22 +673,23 @@ struct lineevent_state {
 	wait_queue_head_t wait;
 	DECLARE_KFIFO(events, struct gpioevent_data, 16);
 	struct mutex read_lock;
+	u64 timestamp;
 };
 
 #define GPIOEVENT_REQUEST_VALID_FLAGS \
 	(GPIOEVENT_REQUEST_RISING_EDGE | \
 	GPIOEVENT_REQUEST_FALLING_EDGE)
 
-static unsigned int lineevent_poll(struct file *filep,
+static __poll_t lineevent_poll(struct file *filep,
 				   struct poll_table_struct *wait)
 {
 	struct lineevent_state *le = filep->private_data;
-	unsigned int events = 0;
+	__poll_t events = 0;
 
 	poll_wait(filep, &le->wait, wait);
 
 	if (!kfifo_is_empty(&le->events))
-		events = POLLIN | POLLRDNORM;
+		events = EPOLLIN | EPOLLRDNORM;
 
 	return events;
 }
@@ -732,7 +808,10 @@ static irqreturn_t lineevent_irq_thread(int irq, void *p)
 	struct gpioevent_data ge;
 	int ret, level;
 
-	ge.timestamp = ktime_get_real_ns();
+	/* Do not leak kernel stack to userspace */
+	memset(&ge, 0, sizeof(ge));
+
+	ge.timestamp = le->timestamp;
 	level = gpiod_get_value_cansleep(le->desc);
 
 	if (le->eflags & GPIOEVENT_REQUEST_RISING_EDGE
@@ -755,9 +834,22 @@ static irqreturn_t lineevent_irq_thread(int irq, void *p)
 
 	ret = kfifo_put(&le->events, ge);
 	if (ret != 0)
-		wake_up_poll(&le->wait, POLLIN);
+		wake_up_poll(&le->wait, EPOLLIN);
 
 	return IRQ_HANDLED;
+}
+
+static irqreturn_t lineevent_irq_handler(int irq, void *p)
+{
+	struct lineevent_state *le = p;
+
+	/*
+	 * Just store the timestamp in hardirq context so we get it as
+	 * close in time as possible to the actual event.
+	 */
+	le->timestamp = ktime_get_real_ns();
+
+	return IRQ_WAKE_THREAD;
 }
 
 static int lineevent_create(struct gpio_device *gdev, void __user *ip)
@@ -818,7 +910,7 @@ static int lineevent_create(struct gpio_device *gdev, void __user *ip)
 	desc = &gdev->descs[offset];
 	ret = gpiod_request(desc, le->label);
 	if (ret)
-		goto out_free_desc;
+		goto out_free_label;
 	le->desc = desc;
 	le->eflags = eflags;
 
@@ -852,7 +944,7 @@ static int lineevent_create(struct gpio_device *gdev, void __user *ip)
 
 	/* Request a thread to read the events */
 	ret = request_threaded_irq(le->irq,
-			NULL,
+			lineevent_irq_handler,
 			lineevent_irq_thread,
 			irqflags,
 			le->label,
@@ -1050,7 +1142,7 @@ static void gpiodevice_release(struct device *dev)
 
 	list_del(&gdev->list);
 	ida_simple_remove(&gpio_ida, gdev->id);
-	kfree(gdev->label);
+	kfree_const(gdev->label);
 	kfree(gdev->descs);
 	kfree(gdev);
 }
@@ -1085,6 +1177,41 @@ static int gpiochip_setup_dev(struct gpio_device *gdev)
 err_remove_device:
 	cdev_device_del(&gdev->chrdev, &gdev->dev);
 	return status;
+}
+
+static void gpiochip_machine_hog(struct gpio_chip *chip, struct gpiod_hog *hog)
+{
+	struct gpio_desc *desc;
+	int rv;
+
+	desc = gpiochip_get_desc(chip, hog->chip_hwnum);
+	if (IS_ERR(desc)) {
+		pr_err("%s: unable to get GPIO desc: %ld\n",
+		       __func__, PTR_ERR(desc));
+		return;
+	}
+
+	if (test_bit(FLAG_IS_HOGGED, &desc->flags))
+		return;
+
+	rv = gpiod_hog(desc, hog->line_name, hog->lflags, hog->dflags);
+	if (rv)
+		pr_err("%s: unable to hog GPIO line (%s:%u): %d\n",
+		       __func__, chip->label, hog->chip_hwnum, rv);
+}
+
+static void machine_gpiochip_add(struct gpio_chip *chip)
+{
+	struct gpiod_hog *hog;
+
+	mutex_lock(&gpio_machine_hogs_mutex);
+
+	list_for_each_entry(hog, &gpio_machine_hogs, list) {
+		if (!strcmp(chip->label, hog->chip_label))
+			gpiochip_machine_hog(chip, hog);
+	}
+
+	mutex_unlock(&gpio_machine_hogs_mutex);
 }
 
 static void gpiochip_setup_devs(void)
@@ -1159,10 +1286,11 @@ int gpiochip_add_data_with_key(struct gpio_chip *chip, void *data,
 		goto err_free_descs;
 	}
 
-	if (chip->label)
-		gdev->label = kstrdup(chip->label, GFP_KERNEL);
-	else
-		gdev->label = kstrdup("unknown", GFP_KERNEL);
+	if (chip->ngpio > FASTPATH_NGPIO)
+		chip_warn(chip, "line cnt %u is greater than fast path cnt %u\n",
+		chip->ngpio, FASTPATH_NGPIO);
+
+	gdev->label = kstrdup_const(chip->label ?: "unknown", GFP_KERNEL);
 	if (!gdev->label) {
 		status = -ENOMEM;
 		goto err_free_descs;
@@ -1209,31 +1337,14 @@ int gpiochip_add_data_with_key(struct gpio_chip *chip, void *data,
 		struct gpio_desc *desc = &gdev->descs[i];
 
 		desc->gdev = gdev;
-		/*
-		 * REVISIT: most hardware initializes GPIOs as inputs
-		 * (often with pullups enabled) so power usage is
-		 * minimized. Linux code should set the gpio direction
-		 * first thing; but until it does, and in case
-		 * chip->get_direction is not set, we may expose the
-		 * wrong direction in sysfs.
+
+		/* REVISIT: most hardware initializes GPIOs as inputs (often
+		 * with pullups enabled) so power usage is minimized. Linux
+		 * code should set the gpio direction first thing; but until
+		 * it does, and in case chip->get_direction is not set, we may
+		 * expose the wrong direction in sysfs.
 		 */
-
-		if (chip->get_direction) {
-			/*
-			 * If we have .get_direction, set up the initial
-			 * direction flag from the hardware.
-			 */
-			int dir = chip->get_direction(chip, i);
-
-			if (!dir)
-				set_bit(FLAG_IS_OUT, &desc->flags);
-		} else if (!chip->direction_input) {
-			/*
-			 * If the chip lacks the .direction_input callback
-			 * we logically assume all lines are outputs.
-			 */
-			set_bit(FLAG_IS_OUT, &desc->flags);
-		}
+		desc->flags = !chip->direction_input ? (1 << FLAG_IS_OUT) : 0;
 	}
 
 #ifdef CONFIG_PINCTRL
@@ -1248,6 +1359,10 @@ int gpiochip_add_data_with_key(struct gpio_chip *chip, void *data,
 	if (status)
 		goto err_remove_from_list;
 
+	status = gpiochip_init_valid_mask(chip);
+	if (status)
+		goto err_remove_irqchip_mask;
+
 	status = gpiochip_add_irqchip(chip, lock_key, request_key);
 	if (status)
 		goto err_remove_chip;
@@ -1257,6 +1372,8 @@ int gpiochip_add_data_with_key(struct gpio_chip *chip, void *data,
 		goto err_remove_chip;
 
 	acpi_gpiochip_add(chip);
+
+	machine_gpiochip_add(chip);
 
 	/*
 	 * By first adding the chardev, and then adding the device,
@@ -1277,13 +1394,15 @@ err_remove_chip:
 	acpi_gpiochip_remove(chip);
 	gpiochip_free_hogs(chip);
 	of_gpiochip_remove(chip);
+	gpiochip_free_valid_mask(chip);
+err_remove_irqchip_mask:
 	gpiochip_irqchip_free_valid_mask(chip);
 err_remove_from_list:
 	spin_lock_irqsave(&gpio_lock, flags);
 	list_del(&gdev->list);
 	spin_unlock_irqrestore(&gpio_lock, flags);
 err_free_label:
-	kfree(gdev->label);
+	kfree_const(gdev->label);
 err_free_descs:
 	kfree(gdev->descs);
 err_free_gdev:
@@ -1333,6 +1452,7 @@ void gpiochip_remove(struct gpio_chip *chip)
 	acpi_gpiochip_remove(chip);
 	gpiochip_remove_pin_ranges(chip);
 	of_gpiochip_remove(chip);
+	gpiochip_free_valid_mask(chip);
 	/*
 	 * We accept no more calls into the driver from this point, so
 	 * NULL the driver data pointer
@@ -1383,7 +1503,7 @@ static int devm_gpio_chip_match(struct device *dev, void *res, void *data)
 }
 
 /**
- * devm_gpiochip_add_data() - Resource manager piochip_add_data()
+ * devm_gpiochip_add_data() - Resource manager gpiochip_add_data()
  * @dev: the device pointer on which irq_chip belongs to.
  * @chip: the chip to register, with chip->base initialized
  * @data: driver-private data associated with this chip
@@ -1493,13 +1613,9 @@ static int gpiochip_irqchip_init_valid_mask(struct gpio_chip *gpiochip)
 	if (!gpiochip->irq.need_valid_mask)
 		return 0;
 
-	gpiochip->irq.valid_mask = kcalloc(BITS_TO_LONGS(gpiochip->ngpio),
-					   sizeof(long), GFP_KERNEL);
+	gpiochip->irq.valid_mask = gpiochip_allocate_mask(gpiochip);
 	if (!gpiochip->irq.valid_mask)
 		return -ENOMEM;
-
-	/* Assume by default all GPIOs are valid */
-	bitmap_fill(gpiochip->irq.valid_mask, gpiochip->ngpio);
 
 	return 0;
 }
@@ -1510,14 +1626,17 @@ static void gpiochip_irqchip_free_valid_mask(struct gpio_chip *gpiochip)
 	gpiochip->irq.valid_mask = NULL;
 }
 
-static bool gpiochip_irqchip_irq_valid(const struct gpio_chip *gpiochip,
-				       unsigned int offset)
+bool gpiochip_irqchip_irq_valid(const struct gpio_chip *gpiochip,
+				unsigned int offset)
 {
+	if (!gpiochip_line_is_valid(gpiochip, offset))
+		return false;
 	/* No mask means all valid */
 	if (likely(!gpiochip->irq.valid_mask))
 		return true;
 	return test_bit(offset, gpiochip->irq.valid_mask);
 }
+EXPORT_SYMBOL_GPL(gpiochip_irqchip_irq_valid);
 
 /**
  * gpiochip_set_cascaded_irqchip() - connects a cascaded irqchip to a gpiochip
@@ -2007,6 +2126,11 @@ EXPORT_SYMBOL_GPL(gpiochip_generic_config);
  * @pctldev: the pin controller to map to
  * @gpio_offset: the start offset in the current gpio_chip number space
  * @pin_group: name of the pin group inside the pin controller
+ *
+ * Calling this function directly from a DeviceTree-supported
+ * pinctrl driver is DEPRECATED. Please see Section 2.1 of
+ * Documentation/devicetree/bindings/gpio/gpio.txt on how to
+ * bind pinctrl and gpio drivers via the "gpio-ranges" property.
  */
 int gpiochip_add_pingroup_range(struct gpio_chip *chip,
 			struct pinctrl_dev *pctldev,
@@ -2060,6 +2184,11 @@ EXPORT_SYMBOL_GPL(gpiochip_add_pingroup_range);
  *
  * Returns:
  * 0 on success, or a negative error-code on failure.
+ *
+ * Calling this function directly from a DeviceTree-supported
+ * pinctrl driver is DEPRECATED. Please see Section 2.1 of
+ * Documentation/devicetree/bindings/gpio/gpio.txt on how to
+ * bind pinctrl and gpio drivers via the "gpio-ranges" property.
  */
 int gpiochip_add_pin_range(struct gpio_chip *chip, const char *pinctl_name,
 			   unsigned int gpio_offset, unsigned int pin_offset,
@@ -2174,40 +2303,37 @@ done:
  * macro to avoid endless duplication. If the desc is NULL it is an
  * optional GPIO and calls should just bail out.
  */
+static int validate_desc(const struct gpio_desc *desc, const char *func)
+{
+	if (!desc)
+		return 0;
+	if (IS_ERR(desc)) {
+		pr_warn("%s: invalid GPIO (errorpointer)\n", func);
+		return PTR_ERR(desc);
+	}
+	if (!desc->gdev) {
+		pr_warn("%s: invalid GPIO (no device)\n", func);
+		return -EINVAL;
+	}
+	if (!desc->gdev->chip) {
+		dev_warn(&desc->gdev->dev,
+			 "%s: backing chip is gone\n", func);
+		return 0;
+	}
+	return 1;
+}
+
 #define VALIDATE_DESC(desc) do { \
-	if (!desc) \
-		return 0; \
-	if (IS_ERR(desc)) {						\
-		pr_warn("%s: invalid GPIO (errorpointer)\n", __func__); \
-		return PTR_ERR(desc); \
-	} \
-	if (!desc->gdev) { \
-		pr_warn("%s: invalid GPIO (no device)\n", __func__); \
-		return -EINVAL; \
-	} \
-	if ( !desc->gdev->chip ) { \
-		dev_warn(&desc->gdev->dev, \
-			 "%s: backing chip is gone\n", __func__); \
-		return 0; \
-	} } while (0)
+	int __valid = validate_desc(desc, __func__); \
+	if (__valid <= 0) \
+		return __valid; \
+	} while (0)
 
 #define VALIDATE_DESC_VOID(desc) do { \
-	if (!desc) \
+	int __valid = validate_desc(desc, __func__); \
+	if (__valid <= 0) \
 		return; \
-	if (IS_ERR(desc)) {						\
-		pr_warn("%s: invalid GPIO (errorpointer)\n", __func__); \
-		return; \
-	} \
-	if (!desc->gdev) { \
-		pr_warn("%s: invalid GPIO (no device)\n", __func__); \
-		return; \
-	} \
-	if (!desc->gdev->chip) { \
-		dev_warn(&desc->gdev->dev, \
-			 "%s: backing chip is gone\n", __func__); \
-		return; \
-	} } while (0)
-
+	} while (0)
 
 int gpiod_request(struct gpio_desc *desc, const char *label)
 {
@@ -2456,7 +2582,7 @@ EXPORT_SYMBOL_GPL(gpiod_direction_output_raw);
  */
 int gpiod_direction_output(struct gpio_desc *desc, int value)
 {
-	struct gpio_chip *gc = desc->gdev->chip;
+	struct gpio_chip *gc;
 	int ret;
 
 	VALIDATE_DESC(desc);
@@ -2473,6 +2599,7 @@ int gpiod_direction_output(struct gpio_desc *desc, int value)
 		return -EIO;
 	}
 
+	gc = desc->gdev->chip;
 	if (test_bit(FLAG_OPEN_DRAIN, &desc->flags)) {
 		/* First see if we can enable open drain in hardware */
 		ret = gpio_set_drive_single_ended(gc, gpio_chip_hwgpio(desc),
@@ -2528,6 +2655,50 @@ int gpiod_set_debounce(struct gpio_desc *desc, unsigned debounce)
 	return chip->set_config(chip, gpio_chip_hwgpio(desc), config);
 }
 EXPORT_SYMBOL_GPL(gpiod_set_debounce);
+
+/**
+ * gpiod_set_transitory - Lose or retain GPIO state on suspend or reset
+ * @desc: descriptor of the GPIO for which to configure persistence
+ * @transitory: True to lose state on suspend or reset, false for persistence
+ *
+ * Returns:
+ * 0 on success, otherwise a negative error code.
+ */
+int gpiod_set_transitory(struct gpio_desc *desc, bool transitory)
+{
+	struct gpio_chip *chip;
+	unsigned long packed;
+	int gpio;
+	int rc;
+
+	VALIDATE_DESC(desc);
+	/*
+	 * Handle FLAG_TRANSITORY first, enabling queries to gpiolib for
+	 * persistence state.
+	 */
+	if (transitory)
+		set_bit(FLAG_TRANSITORY, &desc->flags);
+	else
+		clear_bit(FLAG_TRANSITORY, &desc->flags);
+
+	/* If the driver supports it, set the persistence state now */
+	chip = desc->gdev->chip;
+	if (!chip->set_config)
+		return 0;
+
+	packed = pinconf_to_config_packed(PIN_CONFIG_PERSIST_STATE,
+					  !transitory);
+	gpio = gpio_chip_hwgpio(desc);
+	rc = chip->set_config(chip, gpio, packed);
+	if (rc == -ENOTSUPP) {
+		dev_dbg(&desc->gdev->dev, "Persistence not supported for GPIO %d\n",
+				gpio);
+		return 0;
+	}
+
+	return rc;
+}
+EXPORT_SYMBOL_GPL(gpiod_set_transitory);
 
 /**
  * gpiod_is_active_low - test whether a GPIO is active-low or not
@@ -2606,16 +2777,28 @@ int gpiod_get_array_value_complex(bool raw, bool can_sleep,
 
 	while (i < array_size) {
 		struct gpio_chip *chip = desc_array[i]->gdev->chip;
-		unsigned long mask[BITS_TO_LONGS(chip->ngpio)];
-		unsigned long bits[BITS_TO_LONGS(chip->ngpio)];
+		unsigned long fastpath[2 * BITS_TO_LONGS(FASTPATH_NGPIO)];
+		unsigned long *mask, *bits;
 		int first, j, ret;
+
+		if (likely(chip->ngpio <= FASTPATH_NGPIO)) {
+			mask = fastpath;
+		} else {
+			mask = kmalloc_array(2 * BITS_TO_LONGS(chip->ngpio),
+					   sizeof(*mask),
+					   can_sleep ? GFP_KERNEL : GFP_ATOMIC);
+			if (!mask)
+				return -ENOMEM;
+		}
+
+		bits = mask + BITS_TO_LONGS(chip->ngpio);
+		bitmap_zero(mask, chip->ngpio);
 
 		if (!can_sleep)
 			WARN_ON(chip->can_sleep);
 
 		/* collect all inputs belonging to the same chip */
 		first = i;
-		memset(mask, 0, sizeof(mask));
 		do {
 			const struct gpio_desc *desc = desc_array[i];
 			int hwgpio = gpio_chip_hwgpio(desc);
@@ -2626,8 +2809,11 @@ int gpiod_get_array_value_complex(bool raw, bool can_sleep,
 			 (desc_array[i]->gdev->chip == chip));
 
 		ret = gpio_chip_get_multiple(chip, mask, bits);
-		if (ret)
+		if (ret) {
+			if (mask != fastpath)
+				kfree(mask);
 			return ret;
+		}
 
 		for (j = first; j < i; j++) {
 			const struct gpio_desc *desc = desc_array[j];
@@ -2639,6 +2825,9 @@ int gpiod_get_array_value_complex(bool raw, bool can_sleep,
 			value_array[j] = value;
 			trace_gpio_value(desc_to_gpio(desc), 1, value);
 		}
+
+		if (mask != fastpath)
+			kfree(mask);
 	}
 	return 0;
 }
@@ -2822,7 +3011,7 @@ static void gpio_chip_set_multiple(struct gpio_chip *chip,
 	}
 }
 
-void gpiod_set_array_value_complex(bool raw, bool can_sleep,
+int gpiod_set_array_value_complex(bool raw, bool can_sleep,
 				   unsigned int array_size,
 				   struct gpio_desc **desc_array,
 				   int *value_array)
@@ -2831,14 +3020,26 @@ void gpiod_set_array_value_complex(bool raw, bool can_sleep,
 
 	while (i < array_size) {
 		struct gpio_chip *chip = desc_array[i]->gdev->chip;
-		unsigned long mask[BITS_TO_LONGS(chip->ngpio)];
-		unsigned long bits[BITS_TO_LONGS(chip->ngpio)];
+		unsigned long fastpath[2 * BITS_TO_LONGS(FASTPATH_NGPIO)];
+		unsigned long *mask, *bits;
 		int count = 0;
+
+		if (likely(chip->ngpio <= FASTPATH_NGPIO)) {
+			mask = fastpath;
+		} else {
+			mask = kmalloc_array(2 * BITS_TO_LONGS(chip->ngpio),
+					   sizeof(*mask),
+					   can_sleep ? GFP_KERNEL : GFP_ATOMIC);
+			if (!mask)
+				return -ENOMEM;
+		}
+
+		bits = mask + BITS_TO_LONGS(chip->ngpio);
+		bitmap_zero(mask, chip->ngpio);
 
 		if (!can_sleep)
 			WARN_ON(chip->can_sleep);
 
-		memset(mask, 0, sizeof(mask));
 		do {
 			struct gpio_desc *desc = desc_array[i];
 			int hwgpio = gpio_chip_hwgpio(desc);
@@ -2869,7 +3070,11 @@ void gpiod_set_array_value_complex(bool raw, bool can_sleep,
 		/* push collected bits to outputs */
 		if (count != 0)
 			gpio_chip_set_multiple(chip, mask, bits);
+
+		if (mask != fastpath)
+			kfree(mask);
 	}
+	return 0;
 }
 
 /**
@@ -2893,6 +3098,27 @@ void gpiod_set_raw_value(struct gpio_desc *desc, int value)
 EXPORT_SYMBOL_GPL(gpiod_set_raw_value);
 
 /**
+ * gpiod_set_value_nocheck() - set a GPIO line value without checking
+ * @desc: the descriptor to set the value on
+ * @value: value to set
+ *
+ * This sets the value of a GPIO line backing a descriptor, applying
+ * different semantic quirks like active low and open drain/source
+ * handling.
+ */
+static void gpiod_set_value_nocheck(struct gpio_desc *desc, int value)
+{
+	if (test_bit(FLAG_ACTIVE_LOW, &desc->flags))
+		value = !value;
+	if (test_bit(FLAG_OPEN_DRAIN, &desc->flags))
+		gpio_set_open_drain_value_commit(desc, value);
+	else if (test_bit(FLAG_OPEN_SOURCE, &desc->flags))
+		gpio_set_open_source_value_commit(desc, value);
+	else
+		gpiod_set_raw_value_commit(desc, value);
+}
+
+/**
  * gpiod_set_value() - assign a gpio's value
  * @desc: gpio whose value will be assigned
  * @value: value to assign
@@ -2906,16 +3132,8 @@ EXPORT_SYMBOL_GPL(gpiod_set_raw_value);
 void gpiod_set_value(struct gpio_desc *desc, int value)
 {
 	VALIDATE_DESC_VOID(desc);
-	/* Should be using gpiod_set_value_cansleep() */
 	WARN_ON(desc->gdev->chip->can_sleep);
-	if (test_bit(FLAG_ACTIVE_LOW, &desc->flags))
-		value = !value;
-	if (test_bit(FLAG_OPEN_DRAIN, &desc->flags))
-		gpio_set_open_drain_value_commit(desc, value);
-	else if (test_bit(FLAG_OPEN_SOURCE, &desc->flags))
-		gpio_set_open_source_value_commit(desc, value);
-	else
-		gpiod_set_raw_value_commit(desc, value);
+	gpiod_set_value_nocheck(desc, value);
 }
 EXPORT_SYMBOL_GPL(gpiod_set_value);
 
@@ -2931,13 +3149,13 @@ EXPORT_SYMBOL_GPL(gpiod_set_value);
  * This function should be called from contexts where we cannot sleep, and will
  * complain if the GPIO chip functions potentially sleep.
  */
-void gpiod_set_raw_array_value(unsigned int array_size,
+int gpiod_set_raw_array_value(unsigned int array_size,
 			 struct gpio_desc **desc_array, int *value_array)
 {
 	if (!desc_array)
-		return;
-	gpiod_set_array_value_complex(true, false, array_size, desc_array,
-				      value_array);
+		return -EINVAL;
+	return gpiod_set_array_value_complex(true, false, array_size,
+					desc_array, value_array);
 }
 EXPORT_SYMBOL_GPL(gpiod_set_raw_array_value);
 
@@ -3116,8 +3334,7 @@ bool gpiochip_line_is_persistent(struct gpio_chip *chip, unsigned int offset)
 	if (offset >= chip->ngpio)
 		return false;
 
-	return !test_bit(FLAG_SLEEP_MAY_LOSE_VALUE,
-			 &chip->gpiodev->descs[offset].flags);
+	return !test_bit(FLAG_TRANSITORY, &chip->gpiodev->descs[offset].flags);
 }
 EXPORT_SYMBOL_GPL(gpiochip_line_is_persistent);
 
@@ -3243,9 +3460,7 @@ void gpiod_set_value_cansleep(struct gpio_desc *desc, int value)
 {
 	might_sleep_if(extra_checks);
 	VALIDATE_DESC_VOID(desc);
-	if (test_bit(FLAG_ACTIVE_LOW, &desc->flags))
-		value = !value;
-	gpiod_set_raw_value_commit(desc, value);
+	gpiod_set_value_nocheck(desc, value);
 }
 EXPORT_SYMBOL_GPL(gpiod_set_value_cansleep);
 
@@ -3260,14 +3475,14 @@ EXPORT_SYMBOL_GPL(gpiod_set_value_cansleep);
  *
  * This function is to be called from contexts that can sleep.
  */
-void gpiod_set_raw_array_value_cansleep(unsigned int array_size,
+int gpiod_set_raw_array_value_cansleep(unsigned int array_size,
 					struct gpio_desc **desc_array,
 					int *value_array)
 {
 	might_sleep_if(extra_checks);
 	if (!desc_array)
-		return;
-	gpiod_set_array_value_complex(true, true, array_size, desc_array,
+		return -EINVAL;
+	return gpiod_set_array_value_complex(true, true, array_size, desc_array,
 				      value_array);
 }
 EXPORT_SYMBOL_GPL(gpiod_set_raw_array_value_cansleep);
@@ -3339,6 +3554,33 @@ void gpiod_remove_lookup_table(struct gpiod_lookup_table *table)
 	mutex_unlock(&gpio_lookup_lock);
 }
 EXPORT_SYMBOL_GPL(gpiod_remove_lookup_table);
+
+/**
+ * gpiod_add_hogs() - register a set of GPIO hogs from machine code
+ * @hogs: table of gpio hog entries with a zeroed sentinel at the end
+ */
+void gpiod_add_hogs(struct gpiod_hog *hogs)
+{
+	struct gpio_chip *chip;
+	struct gpiod_hog *hog;
+
+	mutex_lock(&gpio_machine_hogs_mutex);
+
+	for (hog = &hogs[0]; hog->chip_label; hog++) {
+		list_add_tail(&hog->list, &gpio_machine_hogs);
+
+		/*
+		 * The chip may have been registered earlier, so check if it
+		 * exists and, if so, try to hog the line now.
+		 */
+		chip = find_chip_by_name(hog->chip_label);
+		if (chip)
+			gpiochip_machine_hog(chip, hog);
+	}
+
+	mutex_unlock(&gpio_machine_hogs_mutex);
+}
+EXPORT_SYMBOL_GPL(gpiod_add_hogs);
 
 static struct gpiod_lookup_table *gpiod_find_lookup_table(struct device *dev)
 {
@@ -3554,8 +3796,10 @@ int gpiod_configure_flags(struct gpio_desc *desc, const char *con_id,
 
 	if (lflags & GPIO_OPEN_SOURCE)
 		set_bit(FLAG_OPEN_SOURCE, &desc->flags);
-	if (lflags & GPIO_SLEEP_MAY_LOSE_VALUE)
-		set_bit(FLAG_SLEEP_MAY_LOSE_VALUE, &desc->flags);
+
+	status = gpiod_set_transitory(desc, (lflags & GPIO_TRANSITORY));
+	if (status < 0)
+		return status;
 
 	/* No particular flag request, return here... */
 	if (!(dflags & GPIOD_FLAGS_BIT_DIR_SET)) {
@@ -3595,6 +3839,8 @@ struct gpio_desc *__must_check gpiod_get_index(struct device *dev,
 	struct gpio_desc *desc = NULL;
 	int status;
 	enum gpio_lookup_flags lookupflags = 0;
+	/* Maybe we have a device name, maybe not */
+	const char *devname = dev ? dev_name(dev) : "?";
 
 	dev_dbg(dev, "GPIO lookup for consumer %s\n", con_id);
 
@@ -3619,11 +3865,15 @@ struct gpio_desc *__must_check gpiod_get_index(struct device *dev,
 	}
 
 	if (IS_ERR(desc)) {
-		dev_dbg(dev, "lookup for GPIO %s failed\n", con_id);
+		dev_dbg(dev, "No GPIO consumer %s found\n", con_id);
 		return desc;
 	}
 
-	status = gpiod_request(desc, con_id);
+	/*
+	 * If a connection label was passed use that, else attempt to use
+	 * the device name as label
+	 */
+	status = gpiod_request(desc, con_id ? con_id : devname);
 	if (status < 0)
 		return ERR_PTR(status);
 
@@ -3639,17 +3889,88 @@ struct gpio_desc *__must_check gpiod_get_index(struct device *dev,
 EXPORT_SYMBOL_GPL(gpiod_get_index);
 
 /**
+ * gpiod_get_from_of_node() - obtain a GPIO from an OF node
+ * @node:	handle of the OF node
+ * @propname:	name of the DT property representing the GPIO
+ * @index:	index of the GPIO to obtain for the consumer
+ * @dflags:	GPIO initialization flags
+ * @label:	label to attach to the requested GPIO
+ *
+ * Returns:
+ * On successful request the GPIO pin is configured in accordance with
+ * provided @dflags. If the node does not have the requested GPIO
+ * property, NULL is returned.
+ *
+ * In case of error an ERR_PTR() is returned.
+ */
+struct gpio_desc *gpiod_get_from_of_node(struct device_node *node,
+					 const char *propname, int index,
+					 enum gpiod_flags dflags,
+					 const char *label)
+{
+	struct gpio_desc *desc;
+	unsigned long lflags = 0;
+	enum of_gpio_flags flags;
+	bool active_low = false;
+	bool single_ended = false;
+	bool open_drain = false;
+	bool transitory = false;
+	int ret;
+
+	desc = of_get_named_gpiod_flags(node, propname,
+					index, &flags);
+
+	if (!desc || IS_ERR(desc)) {
+		/* If it is not there, just return NULL */
+		if (PTR_ERR(desc) == -ENOENT)
+			return NULL;
+		return desc;
+	}
+
+	active_low = flags & OF_GPIO_ACTIVE_LOW;
+	single_ended = flags & OF_GPIO_SINGLE_ENDED;
+	open_drain = flags & OF_GPIO_OPEN_DRAIN;
+	transitory = flags & OF_GPIO_TRANSITORY;
+
+	ret = gpiod_request(desc, label);
+	if (ret)
+		return ERR_PTR(ret);
+
+	if (active_low)
+		lflags |= GPIO_ACTIVE_LOW;
+
+	if (single_ended) {
+		if (open_drain)
+			lflags |= GPIO_OPEN_DRAIN;
+		else
+			lflags |= GPIO_OPEN_SOURCE;
+	}
+
+	if (transitory)
+		lflags |= GPIO_TRANSITORY;
+
+	ret = gpiod_configure_flags(desc, propname, lflags, dflags);
+	if (ret < 0) {
+		gpiod_put(desc);
+		return ERR_PTR(ret);
+	}
+
+	return desc;
+}
+EXPORT_SYMBOL(gpiod_get_from_of_node);
+
+/**
  * fwnode_get_named_gpiod - obtain a GPIO from firmware node
  * @fwnode:	handle of the firmware node
  * @propname:	name of the firmware property representing the GPIO
- * @index:	index of the GPIO to obtain in the consumer
+ * @index:	index of the GPIO to obtain for the consumer
  * @dflags:	GPIO initialization flags
  * @label:	label to attach to the requested GPIO
  *
  * This function can be used for drivers that get their configuration
- * from firmware.
+ * from opaque firmware.
  *
- * Function properly finds the corresponding GPIO using whatever is the
+ * The function properly finds the corresponding GPIO using whatever is the
  * underlying firmware interface and then makes sure that the GPIO
  * descriptor is requested before it is returned to the caller.
  *
@@ -3666,52 +3987,34 @@ struct gpio_desc *fwnode_get_named_gpiod(struct fwnode_handle *fwnode,
 {
 	struct gpio_desc *desc = ERR_PTR(-ENODEV);
 	unsigned long lflags = 0;
-	bool active_low = false;
-	bool single_ended = false;
-	bool open_drain = false;
 	int ret;
 
 	if (!fwnode)
 		return ERR_PTR(-EINVAL);
 
 	if (is_of_node(fwnode)) {
-		enum of_gpio_flags flags;
-
-		desc = of_get_named_gpiod_flags(to_of_node(fwnode), propname,
-						index, &flags);
-		if (!IS_ERR(desc)) {
-			active_low = flags & OF_GPIO_ACTIVE_LOW;
-			single_ended = flags & OF_GPIO_SINGLE_ENDED;
-			open_drain = flags & OF_GPIO_OPEN_DRAIN;
-		}
+		desc = gpiod_get_from_of_node(to_of_node(fwnode),
+					      propname, index,
+					      dflags,
+					      label);
+		return desc;
 	} else if (is_acpi_node(fwnode)) {
 		struct acpi_gpio_info info;
 
 		desc = acpi_node_get_gpiod(fwnode, propname, index, &info);
-		if (!IS_ERR(desc)) {
-			active_low = info.polarity == GPIO_ACTIVE_LOW;
-			ret = acpi_gpio_update_gpiod_flags(&dflags, info.flags);
-			if (ret)
-				pr_debug("Override GPIO initialization flags\n");
-		}
+		if (IS_ERR(desc))
+			return desc;
+
+		acpi_gpio_update_gpiod_flags(&dflags, &info);
+
+		if (info.polarity == GPIO_ACTIVE_LOW)
+			lflags |= GPIO_ACTIVE_LOW;
 	}
 
-	if (IS_ERR(desc))
-		return desc;
-
+	/* Currently only ACPI takes this path */
 	ret = gpiod_request(desc, label);
 	if (ret)
 		return ERR_PTR(ret);
-
-	if (active_low)
-		lflags |= GPIO_ACTIVE_LOW;
-
-	if (single_ended) {
-		if (open_drain)
-			lflags |= GPIO_OPEN_DRAIN;
-		else
-			lflags |= GPIO_OPEN_SOURCE;
-	}
 
 	ret = gpiod_configure_flags(desc, propname, lflags, dflags);
 	if (ret < 0) {
@@ -3839,8 +4142,7 @@ struct gpio_descs *__must_check gpiod_get_array(struct device *dev,
 	if (count < 0)
 		return ERR_PTR(count);
 
-	descs = kzalloc(sizeof(*descs) + sizeof(descs->desc[0]) * count,
-			GFP_KERNEL);
+	descs = kzalloc(struct_size(descs, desc, count), GFP_KERNEL);
 	if (!descs)
 		return ERR_PTR(-ENOMEM);
 

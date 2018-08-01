@@ -67,7 +67,7 @@ static struct phy_device *phydevs[PHY_MAX_ADDR];
 static enum dsa_tag_protocol dsa_loop_get_protocol(struct dsa_switch *ds,
 						   int port)
 {
-	dev_dbg(ds->dev, "%s\n", __func__);
+	dev_dbg(ds->dev, "%s: port: %d\n", __func__, port);
 
 	return DSA_TAG_PROTO_NONE;
 }
@@ -86,15 +86,22 @@ static int dsa_loop_setup(struct dsa_switch *ds)
 	return 0;
 }
 
-static int dsa_loop_get_sset_count(struct dsa_switch *ds)
+static int dsa_loop_get_sset_count(struct dsa_switch *ds, int port, int sset)
 {
+	if (sset != ETH_SS_STATS && sset != ETH_SS_PHY_STATS)
+		return 0;
+
 	return __DSA_LOOP_CNT_MAX;
 }
 
-static void dsa_loop_get_strings(struct dsa_switch *ds, int port, uint8_t *data)
+static void dsa_loop_get_strings(struct dsa_switch *ds, int port,
+				 u32 stringset, uint8_t *data)
 {
 	struct dsa_loop_priv *ps = ds->priv;
 	unsigned int i;
+
+	if (stringset != ETH_SS_STATS && stringset != ETH_SS_PHY_STATS)
+		return;
 
 	for (i = 0; i < __DSA_LOOP_CNT_MAX; i++)
 		memcpy(data + i * ETH_GSTRING_LEN,
@@ -117,8 +124,6 @@ static int dsa_loop_phy_read(struct dsa_switch *ds, int port, int regnum)
 	struct mii_bus *bus = ps->bus;
 	int ret;
 
-	dev_dbg(ds->dev, "%s\n", __func__);
-
 	ret = mdiobus_read_nested(bus, ps->port_base + port, regnum);
 	if (ret < 0)
 		ps->ports[port].mib[DSA_LOOP_PHY_READ_ERR].val++;
@@ -135,8 +140,6 @@ static int dsa_loop_phy_write(struct dsa_switch *ds, int port,
 	struct mii_bus *bus = ps->bus;
 	int ret;
 
-	dev_dbg(ds->dev, "%s\n", __func__);
-
 	ret = mdiobus_write_nested(bus, ps->port_base + port, regnum, value);
 	if (ret < 0)
 		ps->ports[port].mib[DSA_LOOP_PHY_WRITE_ERR].val++;
@@ -149,7 +152,8 @@ static int dsa_loop_phy_write(struct dsa_switch *ds, int port,
 static int dsa_loop_port_bridge_join(struct dsa_switch *ds, int port,
 				     struct net_device *bridge)
 {
-	dev_dbg(ds->dev, "%s\n", __func__);
+	dev_dbg(ds->dev, "%s: port: %d, bridge: %s\n",
+		__func__, port, bridge->name);
 
 	return 0;
 }
@@ -157,31 +161,35 @@ static int dsa_loop_port_bridge_join(struct dsa_switch *ds, int port,
 static void dsa_loop_port_bridge_leave(struct dsa_switch *ds, int port,
 				       struct net_device *bridge)
 {
-	dev_dbg(ds->dev, "%s\n", __func__);
+	dev_dbg(ds->dev, "%s: port: %d, bridge: %s\n",
+		__func__, port, bridge->name);
 }
 
 static void dsa_loop_port_stp_state_set(struct dsa_switch *ds, int port,
 					u8 state)
 {
-	dev_dbg(ds->dev, "%s\n", __func__);
+	dev_dbg(ds->dev, "%s: port: %d, state: %d\n",
+		__func__, port, state);
 }
 
 static int dsa_loop_port_vlan_filtering(struct dsa_switch *ds, int port,
 					bool vlan_filtering)
 {
-	dev_dbg(ds->dev, "%s\n", __func__);
+	dev_dbg(ds->dev, "%s: port: %d, vlan_filtering: %d\n",
+		__func__, port, vlan_filtering);
 
 	return 0;
 }
 
-static int dsa_loop_port_vlan_prepare(struct dsa_switch *ds, int port,
-				      const struct switchdev_obj_port_vlan *vlan,
-				      struct switchdev_trans *trans)
+static int
+dsa_loop_port_vlan_prepare(struct dsa_switch *ds, int port,
+			   const struct switchdev_obj_port_vlan *vlan)
 {
 	struct dsa_loop_priv *ps = ds->priv;
 	struct mii_bus *bus = ps->bus;
 
-	dev_dbg(ds->dev, "%s\n", __func__);
+	dev_dbg(ds->dev, "%s: port: %d, vlan: %d-%d",
+		__func__, port, vlan->vid_begin, vlan->vid_end);
 
 	/* Just do a sleeping operation to make lockdep checks effective */
 	mdiobus_read(bus, ps->port_base + port, MII_BMSR);
@@ -193,8 +201,7 @@ static int dsa_loop_port_vlan_prepare(struct dsa_switch *ds, int port,
 }
 
 static void dsa_loop_port_vlan_add(struct dsa_switch *ds, int port,
-				   const struct switchdev_obj_port_vlan *vlan,
-				   struct switchdev_trans *trans)
+				   const struct switchdev_obj_port_vlan *vlan)
 {
 	bool untagged = vlan->flags & BRIDGE_VLAN_INFO_UNTAGGED;
 	bool pvid = vlan->flags & BRIDGE_VLAN_INFO_PVID;
@@ -202,8 +209,6 @@ static void dsa_loop_port_vlan_add(struct dsa_switch *ds, int port,
 	struct mii_bus *bus = ps->bus;
 	struct dsa_loop_vlan *vl;
 	u16 vid;
-
-	dev_dbg(ds->dev, "%s\n", __func__);
 
 	/* Just do a sleeping operation to make lockdep checks effective */
 	mdiobus_read(bus, ps->port_base + port, MII_BMSR);
@@ -216,6 +221,9 @@ static void dsa_loop_port_vlan_add(struct dsa_switch *ds, int port,
 			vl->untagged |= BIT(port);
 		else
 			vl->untagged &= ~BIT(port);
+
+		dev_dbg(ds->dev, "%s: port: %d vlan: %d, %stagged, pvid: %d\n",
+			__func__, port, vid, untagged ? "un" : "", pvid);
 	}
 
 	if (pvid)
@@ -231,8 +239,6 @@ static int dsa_loop_port_vlan_del(struct dsa_switch *ds, int port,
 	struct dsa_loop_vlan *vl;
 	u16 vid, pvid = ps->pvid;
 
-	dev_dbg(ds->dev, "%s\n", __func__);
-
 	/* Just do a sleeping operation to make lockdep checks effective */
 	mdiobus_read(bus, ps->port_base + port, MII_BMSR);
 
@@ -245,6 +251,9 @@ static int dsa_loop_port_vlan_del(struct dsa_switch *ds, int port,
 
 		if (pvid == vid)
 			pvid = 1;
+
+		dev_dbg(ds->dev, "%s: port: %d vlan: %d, %stagged, pvid: %d\n",
+			__func__, port, vid, untagged ? "un" : "", pvid);
 	}
 	ps->pvid = pvid;
 
@@ -257,6 +266,7 @@ static const struct dsa_switch_ops dsa_loop_driver = {
 	.get_strings		= dsa_loop_get_strings,
 	.get_ethtool_stats	= dsa_loop_get_ethtool_stats,
 	.get_sset_count		= dsa_loop_get_sset_count,
+	.get_ethtool_phy_stats	= dsa_loop_get_ethtool_stats,
 	.phy_read		= dsa_loop_phy_read,
 	.phy_write		= dsa_loop_phy_write,
 	.port_bridge_join	= dsa_loop_port_bridge_join,

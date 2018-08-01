@@ -18,6 +18,9 @@
 
 #define HCLGE_TM_PORT_BASE_MODE_MSK	BIT(0)
 
+#define HCLGE_DEFAULT_PAUSE_TRANS_GAP	0xFF
+#define HCLGE_DEFAULT_PAUSE_TRANS_TIME	0xFFFF
+
 /* SP or DWRR */
 #define HCLGE_TM_TX_SCHD_DWRR_MSK	BIT(0)
 #define HCLGE_TM_TX_SCHD_SP_MSK		(0xFE)
@@ -86,6 +89,11 @@ struct hclge_pg_shapping_cmd {
 	__le32 pg_shapping_para;
 };
 
+#define HCLGE_BP_GRP_NUM		32
+#define HCLGE_BP_SUB_GRP_ID_S		0
+#define HCLGE_BP_SUB_GRP_ID_M		GENMASK(4, 0)
+#define HCLGE_BP_GRP_ID_S		5
+#define HCLGE_BP_GRP_ID_M		GENMASK(9, 5)
 struct hclge_bp_to_qs_map_cmd {
 	u8 tc_id;
 	u8 rsvd[2];
@@ -97,6 +105,17 @@ struct hclge_bp_to_qs_map_cmd {
 struct hclge_pfc_en_cmd {
 	u8 tx_rx_en_bitmap;
 	u8 pri_en_bitmap;
+};
+
+struct hclge_cfg_pause_param_cmd {
+	u8 mac_addr[ETH_ALEN];
+	u8 pause_trans_gap;
+	u8 rsvd;
+	__le16 pause_trans_time;
+};
+
+struct hclge_pfc_stats_cmd {
+	__le64 pkt_num[3];
 };
 
 struct hclge_port_shapping_cmd {
@@ -118,4 +137,8 @@ void hclge_tm_schd_info_update(struct hclge_dev *hdev, u8 num_tc);
 int hclge_tm_dwrr_cfg(struct hclge_dev *hdev);
 int hclge_tm_map_cfg(struct hclge_dev *hdev);
 int hclge_tm_init_hw(struct hclge_dev *hdev);
+int hclge_mac_pause_en_cfg(struct hclge_dev *hdev, bool tx, bool rx);
+int hclge_pause_addr_cfg(struct hclge_dev *hdev, const u8 *mac_addr);
+int hclge_pfc_rx_stats_get(struct hclge_dev *hdev, u64 *stats);
+int hclge_pfc_tx_stats_get(struct hclge_dev *hdev, u64 *stats);
 #endif

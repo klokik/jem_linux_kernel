@@ -1,6 +1,6 @@
 /*
  * vgaarb.c: Implements the VGA arbitration. For details refer to
- * Documentation/vgaarbiter.txt
+ * Documentation/gpu/vgaarbiter.rst
  *
  *
  * (C) Copyright 2005 Benjamin Herrenschmidt <benh@kernel.crashing.org>
@@ -1266,12 +1266,12 @@ done:
 	return ret_val;
 }
 
-static unsigned int vga_arb_fpoll(struct file *file, poll_table *wait)
+static __poll_t vga_arb_fpoll(struct file *file, poll_table *wait)
 {
 	pr_debug("%s\n", __func__);
 
 	poll_wait(file, &vga_wait_queue, wait);
-	return POLLIN;
+	return EPOLLIN;
 }
 
 static int vga_arb_open(struct inode *inode, struct file *file)

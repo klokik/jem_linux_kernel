@@ -257,8 +257,8 @@ static void set_emss(struct c4iw_ep *ep, u16 opt)
 	if (ep->emss < 128)
 		ep->emss = 128;
 	if (ep->emss & 7)
-		pr_warn("Warning: misaligned mtu idx %u mss %u emss=%u\n",
-			TCPOPT_MSS_G(opt), ep->mss, ep->emss);
+		pr_debug("Warning: misaligned mtu idx %u mss %u emss=%u\n",
+			 TCPOPT_MSS_G(opt), ep->mss, ep->emss);
 	pr_debug("mss_idx %u mss %u emss=%u\n", TCPOPT_MSS_G(opt), ep->mss,
 		 ep->emss);
 }
@@ -2733,9 +2733,8 @@ static int peer_abort(struct c4iw_dev *dev, struct sk_buff *skb)
 		return 0;
 
 	if (cxgb_is_neg_adv(req->status)) {
-		pr_warn("%s Negative advice on abort- tid %u status %d (%s)\n",
-			__func__, ep->hwtid, req->status,
-			neg_adv_str(req->status));
+		pr_debug("Negative advice on abort- tid %u status %d (%s)\n",
+			 ep->hwtid, req->status, neg_adv_str(req->status));
 		ep->stats.abort_neg_adv++;
 		mutex_lock(&dev->rdev.stats.lock);
 		dev->rdev.stats.neg_adv++;
@@ -3211,6 +3210,7 @@ int c4iw_connect(struct iw_cm_id *cm_id, struct iw_cm_conn_param *conn_param)
 
 	ep->com.cm_id = cm_id;
 	ref_cm_id(&ep->com);
+	cm_id->provider_data = ep;
 	ep->com.dev = dev;
 	ep->com.qp = get_qhp(dev, conn_param->qpn);
 	if (!ep->com.qp) {
@@ -3567,8 +3567,8 @@ int c4iw_ep_disconnect(struct c4iw_ep *ep, int abrupt, gfp_t gfp)
 	case MORIBUND:
 	case ABORTING:
 	case DEAD:
-		pr_info("%s ignoring disconnect ep %p state %u\n",
-			__func__, ep, ep->com.state);
+		pr_debug("ignoring disconnect ep %p state %u\n",
+			 ep, ep->com.state);
 		break;
 	default:
 		WARN_ONCE(1, "Bad endpoint state %u\n", ep->com.state);
@@ -4097,9 +4097,15 @@ static void process_work(struct work_struct *work)
 		dev = *((struct c4iw_dev **) (skb->cb + sizeof(void *)));
 		opcode = rpl->ot.opcode;
 
-		ret = work_handlers[opcode](dev, skb);
-		if (!ret)
+		if (opcode >= ARRAY_SIZE(work_handlers) ||
+		    !work_handlers[opcode]) {
+			pr_err("No handler for opcode 0x%x.\n", opcode);
 			kfree_skb(skb);
+		} else {
+			ret = work_handlers[opcode](dev, skb);
+			if (!ret)
+				kfree_skb(skb);
+		}
 		process_timedout_eps();
 	}
 }
@@ -4201,8 +4207,8 @@ static int peer_abort_intr(struct c4iw_dev *dev, struct sk_buff *skb)
 		return 0;
 	}
 	if (cxgb_is_neg_adv(req->status)) {
-		pr_warn("%s Negative advice on abort- tid %u status %d (%s)\n",
-			__func__, ep->hwtid, req->status,
+		pr_debug("Negative advice on abort- tid %u status %d (%s)\n",
+			 ep->hwtid, req->status,
 			 neg_adv_str(req->status));
 		goto out;
 	}

@@ -103,15 +103,15 @@ static struct file *cxl_getfile(const char *name,
 	d_instantiate(path.dentry, inode);
 
 	file = alloc_file(&path, OPEN_FMODE(flags), fops);
-	if (IS_ERR(file))
-		goto err_dput;
+	if (IS_ERR(file)) {
+		path_put(&path);
+		goto err_fs;
+	}
 	file->f_flags = flags & (O_ACCMODE | O_NONBLOCK);
 	file->private_data = priv;
 
 	return file;
 
-err_dput:
-	path_put(&path);
 err_inode:
 	iput(inode);
 err_fs:
@@ -427,7 +427,7 @@ int cxl_fd_mmap(struct file *file, struct vm_area_struct *vm)
 	return afu_mmap(file, vm);
 }
 EXPORT_SYMBOL_GPL(cxl_fd_mmap);
-unsigned int cxl_fd_poll(struct file *file, struct poll_table_struct *poll)
+__poll_t cxl_fd_poll(struct file *file, struct poll_table_struct *poll)
 {
 	return afu_poll(file, poll);
 }

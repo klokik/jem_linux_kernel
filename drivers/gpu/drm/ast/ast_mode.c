@@ -644,6 +644,7 @@ static void ast_crtc_commit(struct drm_crtc *crtc)
 {
 	struct ast_private *ast = crtc->dev->dev_private;
 	ast_set_index_reg_mask(ast, AST_IO_SEQ_PORT, 0x1, 0xdf, 0);
+	ast_crtc_load_lut(crtc);
 }
 
 
@@ -798,7 +799,7 @@ static int ast_get_modes(struct drm_connector *connector)
 	return 0;
 }
 
-static int ast_mode_valid(struct drm_connector *connector,
+static enum drm_mode_status ast_mode_valid(struct drm_connector *connector,
 			  struct drm_display_mode *mode)
 {
 	struct ast_private *ast = connector->dev->dev_private;

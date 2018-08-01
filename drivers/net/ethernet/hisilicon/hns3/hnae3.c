@@ -36,6 +36,49 @@ static bool hnae3_client_match(enum hnae3_client_type client_type,
 	return false;
 }
 
+static void hnae3_set_client_init_flag(struct hnae3_client *client,
+				       struct hnae3_ae_dev *ae_dev, int inited)
+{
+	switch (client->type) {
+	case HNAE3_CLIENT_KNIC:
+		hnae_set_bit(ae_dev->flag, HNAE3_KNIC_CLIENT_INITED_B, inited);
+		break;
+	case HNAE3_CLIENT_UNIC:
+		hnae_set_bit(ae_dev->flag, HNAE3_UNIC_CLIENT_INITED_B, inited);
+		break;
+	case HNAE3_CLIENT_ROCE:
+		hnae_set_bit(ae_dev->flag, HNAE3_ROCE_CLIENT_INITED_B, inited);
+		break;
+	default:
+		break;
+	}
+}
+
+static int hnae3_get_client_init_flag(struct hnae3_client *client,
+				       struct hnae3_ae_dev *ae_dev)
+{
+	int inited = 0;
+
+	switch (client->type) {
+	case HNAE3_CLIENT_KNIC:
+		inited = hnae_get_bit(ae_dev->flag,
+				       HNAE3_KNIC_CLIENT_INITED_B);
+		break;
+	case HNAE3_CLIENT_UNIC:
+		inited = hnae_get_bit(ae_dev->flag,
+				       HNAE3_UNIC_CLIENT_INITED_B);
+		break;
+	case HNAE3_CLIENT_ROCE:
+		inited = hnae_get_bit(ae_dev->flag,
+				      HNAE3_ROCE_CLIENT_INITED_B);
+		break;
+	default:
+		break;
+	}
+
+	return inited;
+}
+
 static int hnae3_match_n_instantiate(struct hnae3_client *client,
 				     struct hnae3_ae_dev *ae_dev, bool is_reg)
 {
@@ -50,13 +93,22 @@ static int hnae3_match_n_instantiate(struct hnae3_client *client,
 	/* now, (un-)instantiate client by calling lower layer */
 	if (is_reg) {
 		ret = ae_dev->ops->init_client_instance(client, ae_dev);
-		if (ret)
+		if (ret) {
 			dev_err(&ae_dev->pdev->dev,
 				"fail to instantiate client\n");
-		return ret;
+			return ret;
+		}
+
+		hnae3_set_client_init_flag(client, ae_dev, 1);
+		return 0;
 	}
 
-	ae_dev->ops->uninit_client_instance(client, ae_dev);
+	if (hnae3_get_client_init_flag(client, ae_dev)) {
+		ae_dev->ops->uninit_client_instance(client, ae_dev);
+
+		hnae3_set_client_init_flag(client, ae_dev, 0);
+	}
+
 	return 0;
 }
 
@@ -89,7 +141,7 @@ int hnae3_register_client(struct hnae3_client *client)
 exit:
 	mutex_unlock(&hnae3_common_lock);
 
-	return ret;
+	return 0;
 }
 EXPORT_SYMBOL(hnae3_register_client);
 
@@ -112,7 +164,7 @@ EXPORT_SYMBOL(hnae3_unregister_client);
  * @ae_algo: AE algorithm
  * NOTE: the duplicated name will not be checked
  */
-int hnae3_register_ae_algo(struct hnae3_ae_algo *ae_algo)
+void hnae3_register_ae_algo(struct hnae3_ae_algo *ae_algo)
 {
 	const struct pci_device_id *id;
 	struct hnae3_ae_dev *ae_dev;
@@ -151,8 +203,6 @@ int hnae3_register_ae_algo(struct hnae3_ae_algo *ae_algo)
 	}
 
 	mutex_unlock(&hnae3_common_lock);
-
-	return ret;
 }
 EXPORT_SYMBOL(hnae3_register_ae_algo);
 
@@ -168,6 +218,9 @@ void hnae3_unregister_ae_algo(struct hnae3_ae_algo *ae_algo)
 	mutex_lock(&hnae3_common_lock);
 	/* Check if there are matched ae_dev */
 	list_for_each_entry(ae_dev, &hnae3_ae_dev_list, node) {
+		if (!hnae_get_bit(ae_dev->flag, HNAE3_DEV_INITED_B))
+			continue;
+
 		id = pci_match_id(ae_algo->pdev_id_table, ae_dev->pdev);
 		if (!id)
 			continue;
@@ -191,7 +244,7 @@ EXPORT_SYMBOL(hnae3_unregister_ae_algo);
  * @ae_dev: the AE device
  * NOTE: the duplicated name will not be checked
  */
-int hnae3_register_ae_dev(struct hnae3_ae_dev *ae_dev)
+void hnae3_register_ae_dev(struct hnae3_ae_dev *ae_dev)
 {
 	const struct pci_device_id *id;
 	struct hnae3_ae_algo *ae_algo;
@@ -199,6 +252,7 @@ int hnae3_register_ae_dev(struct hnae3_ae_dev *ae_dev)
 	int ret = 0;
 
 	mutex_lock(&hnae3_common_lock);
+
 	list_add_tail(&ae_dev->node, &hnae3_ae_dev_list);
 
 	/* Check if there are matched ae_algo */
@@ -237,8 +291,6 @@ int hnae3_register_ae_dev(struct hnae3_ae_dev *ae_dev)
 
 out_err:
 	mutex_unlock(&hnae3_common_lock);
-
-	return ret;
 }
 EXPORT_SYMBOL(hnae3_register_ae_dev);
 
@@ -254,6 +306,9 @@ void hnae3_unregister_ae_dev(struct hnae3_ae_dev *ae_dev)
 	mutex_lock(&hnae3_common_lock);
 	/* Check if there are matched ae_algo */
 	list_for_each_entry(ae_algo, &hnae3_ae_algo_list, node) {
+		if (!hnae_get_bit(ae_dev->flag, HNAE3_DEV_INITED_B))
+			continue;
+
 		id = pci_match_id(ae_algo->pdev_id_table, ae_dev->pdev);
 		if (!id)
 			continue;
@@ -273,3 +328,4 @@ EXPORT_SYMBOL(hnae3_unregister_ae_dev);
 MODULE_AUTHOR("Huawei Tech. Co., Ltd.");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("HNAE3(Hisilicon Network Acceleration Engine) Framework");
+MODULE_VERSION(HNAE3_MOD_VERSION);

@@ -188,7 +188,6 @@ struct exynos_drm_g2d_private {
 
 struct drm_exynos_file_private {
 	struct exynos_drm_g2d_private	*g2d_priv;
-	struct device			*ipp_dev;
 };
 
 /*
@@ -274,9 +273,17 @@ static inline int exynos_dpi_bind(struct drm_device *dev,
 }
 #endif
 
+#ifdef CONFIG_DRM_EXYNOS_FIMC
+int exynos_drm_check_fimc_device(struct device *dev);
+#else
+static inline int exynos_drm_check_fimc_device(struct device *dev)
+{
+	return 0;
+}
+#endif
+
 int exynos_atomic_commit(struct drm_device *dev, struct drm_atomic_state *state,
 			 bool nonblock);
-int exynos_atomic_check(struct drm_device *dev, struct drm_atomic_state *state);
 
 
 extern struct platform_driver fimd_driver;
@@ -290,7 +297,7 @@ extern struct platform_driver vidi_driver;
 extern struct platform_driver g2d_driver;
 extern struct platform_driver fimc_driver;
 extern struct platform_driver rotator_driver;
+extern struct platform_driver scaler_driver;
 extern struct platform_driver gsc_driver;
-extern struct platform_driver ipp_driver;
 extern struct platform_driver mic_driver;
 #endif

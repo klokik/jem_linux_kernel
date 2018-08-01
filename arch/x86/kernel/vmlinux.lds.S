@@ -102,7 +102,6 @@ SECTIONS
 		_stext = .;
 		/* bootstrapping code */
 		HEAD_TEXT
-		. = ALIGN(8);
 		TEXT_TEXT
 		SCHED_TEXT
 		CPUIDLE_TEXT
@@ -118,10 +117,18 @@ SECTIONS
 
 #ifdef CONFIG_X86_64
 		. = ALIGN(PAGE_SIZE);
+		__entry_trampoline_start = .;
 		_entry_trampoline = .;
 		*(.entry_trampoline)
 		. = ALIGN(PAGE_SIZE);
+		__entry_trampoline_end = .;
 		ASSERT(. - _entry_trampoline == PAGE_SIZE, "entry trampoline is too big");
+#endif
+
+#ifdef CONFIG_RETPOLINE
+		__indirect_thunk_start = .;
+		*(.text.__x86.indirect_thunk)
+		__indirect_thunk_end = .;
 #endif
 
 		/* End of text section */
@@ -192,7 +199,7 @@ SECTIONS
 		. = __vvar_beginning_hack + PAGE_SIZE;
 	} :data
 
-       . = ALIGN(__vvar_page + PAGE_SIZE, PAGE_SIZE);
+	. = ALIGN(__vvar_page + PAGE_SIZE, PAGE_SIZE);
 
 	/* Init code and data - will be freed after init */
 	. = ALIGN(PAGE_SIZE);
@@ -360,8 +367,8 @@ SECTIONS
 	. = ALIGN(PAGE_SIZE);		/* keep VO_INIT_SIZE page aligned */
 	_end = .;
 
-        STABS_DEBUG
-        DWARF_DEBUG
+	STABS_DEBUG
+	DWARF_DEBUG
 
 	/* Sections to be discarded */
 	DISCARDS

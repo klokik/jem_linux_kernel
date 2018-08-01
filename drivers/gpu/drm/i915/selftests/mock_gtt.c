@@ -76,7 +76,6 @@ mock_ppgtt(struct drm_i915_private *i915,
 
 	INIT_LIST_HEAD(&ppgtt->base.global_link);
 	drm_mm_init(&ppgtt->base.mm, 0, ppgtt->base.total);
-	i915_gem_timeline_init(i915, &ppgtt->base.timeline, name);
 
 	ppgtt->base.clear_range = nop_clear_range;
 	ppgtt->base.insert_page = mock_insert_page;
@@ -110,8 +109,8 @@ void mock_init_ggtt(struct drm_i915_private *i915)
 
 	ggtt->base.i915 = i915;
 
-	ggtt->mappable_base = 0;
-	ggtt->mappable_end = 2048 * PAGE_SIZE;
+	ggtt->gmadr = (struct resource) DEFINE_RES_MEM(0, 2048 * PAGE_SIZE);
+	ggtt->mappable_end = resource_size(&ggtt->gmadr);
 	ggtt->base.total = 4096 * PAGE_SIZE;
 
 	ggtt->base.clear_range = nop_clear_range;

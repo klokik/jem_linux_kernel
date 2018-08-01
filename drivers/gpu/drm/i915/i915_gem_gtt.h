@@ -38,9 +38,9 @@
 #include <linux/mm.h>
 #include <linux/pagevec.h>
 
-#include "i915_gem_timeline.h"
-#include "i915_gem_request.h"
+#include "i915_request.h"
 #include "i915_selftest.h"
+#include "i915_timeline.h"
 
 #define I915_GTT_PAGE_SIZE_4K BIT(12)
 #define I915_GTT_PAGE_SIZE_64K BIT(16)
@@ -256,7 +256,6 @@ struct i915_pml4 {
 
 struct i915_address_space {
 	struct drm_mm mm;
-	struct i915_gem_timeline timeline;
 	struct drm_i915_private *i915;
 	struct device *dma;
 	/* Every address space belongs to a struct file - except for the global
@@ -343,6 +342,7 @@ struct i915_address_space {
 	void (*clear_pages)(struct i915_vma *vma);
 
 	I915_SELFTEST_DECLARE(struct fault_attr fault_attr);
+	I915_SELFTEST_DECLARE(bool scrub_64K);
 };
 
 #define i915_is_ggtt(V) (!(V)->file)
@@ -368,23 +368,10 @@ i915_vm_has_scratch_64K(struct i915_address_space *vm)
  */
 struct i915_ggtt {
 	struct i915_address_space base;
-	struct io_mapping mappable;	/* Mapping to our CPU mappable region */
 
-	phys_addr_t mappable_base;	/* PA of our GMADR */
-	u64 mappable_end;		/* End offset that we can CPU map */
-
-	/* Stolen memory is segmented in hardware with different portions
-	 * offlimits to certain functions.
-	 *
-	 * The drm_mm is initialised to the total accessible range, as found
-	 * from the PCI config. On Broadwell+, this is further restricted to
-	 * avoid the first page! The upper end of stolen memory is reserved for
-	 * hardware functions and similarly removed from the accessible range.
-	 */
-	u32 stolen_size;		/* Total size of stolen memory */
-	u32 stolen_usable_size;	/* Total size minus reserved ranges */
-	u32 stolen_reserved_base;
-	u32 stolen_reserved_size;
+	struct io_mapping iomap;	/* Mapping to our CPU mappable region */
+	struct resource gmadr;          /* GMADR resource */
+	resource_size_t mappable_end;	/* End offset that we can CPU map */
 
 	/** "Graphics Stolen Memory" holds the global PTEs */
 	void __iomem *gsm;
@@ -411,7 +398,7 @@ struct i915_hw_ppgtt {
 	gen6_pte_t __iomem *pd_addr;
 
 	int (*switch_mm)(struct i915_hw_ppgtt *ppgtt,
-			 struct drm_i915_gem_request *req);
+			 struct i915_request *rq);
 	void (*debug_dump)(struct i915_hw_ppgtt *ppgtt, struct seq_file *m);
 };
 

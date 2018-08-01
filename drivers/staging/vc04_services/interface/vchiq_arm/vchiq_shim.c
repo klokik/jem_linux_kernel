@@ -590,7 +590,6 @@ static VCHIQ_STATUS_T shim_callback(VCHIQ_REASON_T reason,
 				  VCHI_CALLBACK_MSG_AVAILABLE, NULL);
 
 		goto done;
-		break;
 
 	case VCHIQ_BULK_TRANSMIT_DONE:
 		service->callback(service->callback_param,
@@ -800,8 +799,7 @@ int32_t vchi_get_peer_version(const VCHI_SERVICE_HANDLE_T handle, short *peer_ve
 	int32_t ret = -1;
 	struct shim_service *service = (struct shim_service *)handle;
 
-	if (service)
-	{
+	if (service) {
 		VCHIQ_STATUS_T status;
 
 		status = vchiq_get_peer_version(service->handle, peer_version);

@@ -447,7 +447,7 @@ static void dasd_eer_snss_cb(struct dasd_ccw_req *cqr, void *data)
 		 * is a new ccw in device->eer_cqr. Free the "old"
 		 * snss request now.
 		 */
-		dasd_kfree_request(cqr, device);
+		dasd_sfree_request(cqr, device);
 }
 
 /*
@@ -472,8 +472,8 @@ int dasd_eer_enable(struct dasd_device *device)
 	if (rc)
 		goto out;
 
-	cqr = dasd_kmalloc_request(DASD_ECKD_MAGIC, 1 /* SNSS */,
-				   SNSS_DATA_SIZE, device);
+	cqr = dasd_smalloc_request(DASD_ECKD_MAGIC, 1 /* SNSS */,
+				   SNSS_DATA_SIZE, device, NULL);
 	if (IS_ERR(cqr)) {
 		rc = -ENOMEM;
 		cqr = NULL;
@@ -505,7 +505,7 @@ out:
 	spin_unlock_irqrestore(get_ccwdev_lock(device->cdev), flags);
 
 	if (cqr)
-		dasd_kfree_request(cqr, device);
+		dasd_sfree_request(cqr, device);
 
 	return rc;
 }
@@ -528,7 +528,7 @@ void dasd_eer_disable(struct dasd_device *device)
 	in_use = test_and_clear_bit(DASD_FLAG_EER_IN_USE, &device->flags);
 	spin_unlock_irqrestore(get_ccwdev_lock(device->cdev), flags);
 	if (cqr && !in_use)
-		dasd_kfree_request(cqr, device);
+		dasd_sfree_request(cqr, device);
 }
 
 /*
@@ -561,8 +561,8 @@ static int dasd_eer_open(struct inode *inp, struct file *filp)
 		return -EINVAL;
 	}
 	eerb->buffersize = eerb->buffer_page_count * PAGE_SIZE;
-	eerb->buffer = kmalloc(eerb->buffer_page_count * sizeof(char *),
-			       GFP_KERNEL);
+	eerb->buffer = kmalloc_array(eerb->buffer_page_count, sizeof(char *),
+				     GFP_KERNEL);
         if (!eerb->buffer) {
 		kfree(eerb);
                 return -ENOMEM;
@@ -661,9 +661,9 @@ static ssize_t dasd_eer_read(struct file *filp, char __user *buf,
 	return effective_count;
 }
 
-static unsigned int dasd_eer_poll(struct file *filp, poll_table *ptable)
+static __poll_t dasd_eer_poll(struct file *filp, poll_table *ptable)
 {
-	unsigned int mask;
+	__poll_t mask;
 	unsigned long flags;
 	struct eerbuffer *eerb;
 
@@ -671,7 +671,7 @@ static unsigned int dasd_eer_poll(struct file *filp, poll_table *ptable)
 	poll_wait(filp, &dasd_eer_read_wait_queue, ptable);
 	spin_lock_irqsave(&bufferlock, flags);
 	if (eerb->head != eerb->tail)
-		mask = POLLIN | POLLRDNORM ;
+		mask = EPOLLIN | EPOLLRDNORM ;
 	else
 		mask = 0;
 	spin_unlock_irqrestore(&bufferlock, flags);

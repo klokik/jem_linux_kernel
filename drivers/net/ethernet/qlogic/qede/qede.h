@@ -40,6 +40,7 @@
 #include <linux/kernel.h>
 #include <linux/mutex.h>
 #include <linux/bpf.h>
+#include <net/xdp.h>
 #include <linux/qed/qede_rdma.h>
 #include <linux/io.h>
 #ifdef CONFIG_RFS_ACCEL
@@ -52,9 +53,9 @@
 #include <linux/qed/qed_eth_if.h>
 
 #define QEDE_MAJOR_VERSION		8
-#define QEDE_MINOR_VERSION		10
-#define QEDE_REVISION_VERSION		10
-#define QEDE_ENGINEERING_VERSION	21
+#define QEDE_MINOR_VERSION		33
+#define QEDE_REVISION_VERSION		0
+#define QEDE_ENGINEERING_VERSION	20
 #define DRV_MODULE_VERSION __stringify(QEDE_MAJOR_VERSION) "."	\
 		__stringify(QEDE_MINOR_VERSION) "."		\
 		__stringify(QEDE_REVISION_VERSION) "."		\
@@ -74,6 +75,7 @@ struct qede_stats_common {
 	u64 rx_bcast_pkts;
 	u64 mftag_filter_discards;
 	u64 mac_filter_discards;
+	u64 gft_filter_drop;
 	u64 tx_ucast_bytes;
 	u64 tx_mcast_bytes;
 	u64 tx_bcast_bytes;
@@ -86,6 +88,7 @@ struct qede_stats_common {
 	u64 coalesced_aborts_num;
 	u64 non_coalesced_pkts;
 	u64 coalesced_bytes;
+	u64 link_change_count;
 
 	/* port */
 	u64 rx_64_byte_packets;
@@ -289,15 +292,12 @@ struct qede_agg_info {
 	 * aggregation.
 	 */
 	struct sw_rx_data buffer;
-	dma_addr_t buffer_mapping;
-
 	struct sk_buff *skb;
 
 	/* We need some structs from the start cookie until termination */
 	u16 vlan_tag;
-	u16 start_cqe_bd_len;
-	u8 start_cqe_placement_offset;
 
+	bool tpa_start_fail;
 	u8 state;
 	u8 frag_id;
 
@@ -345,6 +345,7 @@ struct qede_rx_queue {
 	u64 xdp_no_pass;
 
 	void *handle;
+	struct xdp_rxq_info xdp_rxq;
 };
 
 union db_prod {
@@ -494,6 +495,8 @@ int qede_vlan_rx_kill_vid(struct net_device *dev, __be16 proto, u16 vid);
 void qede_vlan_mark_nonconfigured(struct qede_dev *edev);
 int qede_configure_vlan_filters(struct qede_dev *edev);
 
+netdev_features_t qede_fix_features(struct net_device *dev,
+				    netdev_features_t features);
 int qede_set_features(struct net_device *dev, netdev_features_t features);
 void qede_set_rx_mode(struct net_device *ndev);
 void qede_config_rx_mode(struct net_device *ndev);

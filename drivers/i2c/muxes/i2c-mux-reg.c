@@ -124,13 +124,11 @@ static int i2c_mux_reg_probe_dt(struct regmux *mux,
 	}
 	mux->data.write_only = of_property_read_bool(np, "write-only");
 
-	values = devm_kzalloc(&pdev->dev,
-			      sizeof(*mux->data.values) * mux->data.n_values,
+	values = devm_kcalloc(&pdev->dev,
+			      mux->data.n_values, sizeof(*mux->data.values),
 			      GFP_KERNEL);
-	if (!values) {
-		dev_err(&pdev->dev, "Cannot allocate values array");
+	if (!values)
 		return -ENOMEM;
-	}
 
 	for_each_child_of_node(np, child) {
 		of_property_read_u32(child, "reg", values + i);
@@ -177,6 +175,9 @@ static int i2c_mux_reg_probe(struct platform_device *pdev)
 			sizeof(mux->data));
 	} else {
 		ret = i2c_mux_reg_probe_dt(mux, pdev);
+		if (ret == -EPROBE_DEFER)
+			return ret;
+
 		if (ret < 0) {
 			dev_err(&pdev->dev, "Error parsing device tree");
 			return ret;

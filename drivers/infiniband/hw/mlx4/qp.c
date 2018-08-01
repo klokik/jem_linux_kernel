@@ -573,8 +573,8 @@ static int alloc_proxy_bufs(struct ib_device *dev, struct mlx4_ib_qp *qp)
 	int i;
 
 	qp->sqp_proxy_rcv =
-		kmalloc(sizeof (struct mlx4_ib_buf) * qp->rq.wqe_cnt,
-			GFP_KERNEL);
+		kmalloc_array(qp->rq.wqe_cnt, sizeof(struct mlx4_ib_buf),
+			      GFP_KERNEL);
 	if (!qp->sqp_proxy_rcv)
 		return -ENOMEM;
 	for (i = 0; i < qp->rq.wqe_cnt; i++) {
@@ -673,7 +673,8 @@ static int set_qp_rss(struct mlx4_ib_dev *dev, struct mlx4_ib_rss *rss_ctx,
 					  MLX4_IB_RX_HASH_SRC_PORT_TCP	|
 					  MLX4_IB_RX_HASH_DST_PORT_TCP	|
 					  MLX4_IB_RX_HASH_SRC_PORT_UDP	|
-					  MLX4_IB_RX_HASH_DST_PORT_UDP)) {
+					  MLX4_IB_RX_HASH_DST_PORT_UDP  |
+					  MLX4_IB_RX_HASH_INNER)) {
 		pr_debug("RX Hash fields_mask has unsupported mask (0x%llx)\n",
 			 ucmd->rx_hash_fields_mask);
 		return (-EOPNOTSUPP);
@@ -734,10 +735,24 @@ static int set_qp_rss(struct mlx4_ib_dev *dev, struct mlx4_ib_rss *rss_ctx,
 		return (-EOPNOTSUPP);
 	}
 
+	if (ucmd->rx_hash_fields_mask & MLX4_IB_RX_HASH_INNER) {
+		if (dev->dev->caps.tunnel_offload_mode ==
+		    MLX4_TUNNEL_OFFLOAD_MODE_VXLAN) {
+			/*
+			 * Hash according to inner headers if exist, otherwise
+			 * according to outer headers.
+			 */
+			rss_ctx->flags |= MLX4_RSS_BY_INNER_HEADERS_IPONLY;
+		} else {
+			pr_debug("RSS Hash for inner headers isn't supported\n");
+			return (-EOPNOTSUPP);
+		}
+	}
+
 	return 0;
 }
 
-static int create_qp_rss(struct mlx4_ib_dev *dev, struct ib_pd *ibpd,
+static int create_qp_rss(struct mlx4_ib_dev *dev,
 			 struct ib_qp_init_attr *init_attr,
 			 struct mlx4_ib_create_qp_rss *ucmd,
 			 struct mlx4_ib_qp *qp)
@@ -860,7 +875,7 @@ static struct ib_qp *_mlx4_ib_create_qp_rss(struct ib_pd *pd,
 	qp->pri.vid = 0xFFFF;
 	qp->alt.vid = 0xFFFF;
 
-	err = create_qp_rss(to_mdev(pd->device), pd, init_attr, &ucmd, qp);
+	err = create_qp_rss(to_mdev(pd->device), init_attr, &ucmd, qp);
 	if (err) {
 		kfree(qp);
 		return ERR_PTR(err);
@@ -1080,6 +1095,17 @@ static int create_qp_common(struct mlx4_ib_dev *dev, struct ib_pd *pd,
 			range_size = 1 << ucmd.wq.log_range_size;
 		} else {
 			qp->inl_recv_sz = ucmd.qp.inl_recv_sz;
+		}
+
+		if (init_attr->create_flags & IB_QP_CREATE_SCATTER_FCS) {
+			if (!(dev->dev->caps.flags &
+			      MLX4_DEV_CAP_FLAG_FCS_KEEP)) {
+				pr_debug("scatter FCS is unsupported\n");
+				err = -EOPNOTSUPP;
+				goto err;
+			}
+
+			qp->flags |= MLX4_IB_QP_SCATTER_FCS;
 		}
 
 		err = set_rq_size(dev, &init_attr->cap, !!pd->uobject,
@@ -1836,6 +1862,8 @@ static int _mlx4_set_path(struct mlx4_ib_dev *dev,
 			mlx4_ib_gid_index_to_real_index(dev, port,
 							grh->sgid_index);
 
+		if (real_sgid_index < 0)
+			return real_sgid_index;
 		if (real_sgid_index >= dev->dev->caps.gid_table_len[port]) {
 			pr_err("sgid_index (%u) too large. max is %d\n",
 			       real_sgid_index, dev->dev->caps.gid_table_len[port] - 1);
@@ -2218,6 +2246,9 @@ static int __mlx4_ib_modify_qp(void *src, enum mlx4_ib_source_type src_type,
 	if (qp->inl_recv_sz)
 		context->param3 |= cpu_to_be32(1 << 25);
 
+	if (qp->flags & MLX4_IB_QP_SCATTER_FCS)
+		context->param3 |= cpu_to_be32(1 << 29);
+
 	if (qp_type == IB_QPT_GSI || qp_type == IB_QPT_SMI)
 		context->mtu_msgmax = (IB_MTU_4096 << 5) | 11;
 	else if (qp_type == IB_QPT_RAW_PACKET)
@@ -2340,9 +2371,7 @@ static int __mlx4_ib_modify_qp(void *src, enum mlx4_ib_source_type src_type,
 
 			status = ib_get_cached_gid(&dev->ib_dev, port_num,
 						   index, &gid, &gid_attr);
-			if (!status && !memcmp(&gid, &zgid, sizeof(gid)))
-				status = -ENOENT;
-			if (!status && gid_attr.ndev) {
+			if (!status) {
 				vlan = rdma_vlan_dev_vlan_id(gid_attr.ndev);
 				memcpy(smac, gid_attr.ndev->dev_addr, ETH_ALEN);
 				dev_put(gid_attr.ndev);
@@ -3049,7 +3078,7 @@ static int fill_gid_by_hw_index(struct mlx4_ib_dev *ibdev, u8 port_num,
 	memcpy(gid, &port_gid_table->gids[index].gid, sizeof(*gid));
 	*gid_type = port_gid_table->gids[index].gid_type;
 	spin_unlock_irqrestore(&iboe->lock, flags);
-	if (!memcmp(gid, &zgid, sizeof(*gid)))
+	if (rdma_is_zero_gid(gid))
 		return -ENOENT;
 
 	return 0;
@@ -3864,8 +3893,8 @@ out:
 		 */
 		wmb();
 
-		writel(qp->doorbell_qpn,
-		       to_mdev(ibqp->device)->uar_map + MLX4_SEND_DOORBELL);
+		writel_relaxed(qp->doorbell_qpn,
+			to_mdev(ibqp->device)->uar_map + MLX4_SEND_DOORBELL);
 
 		/*
 		 * Make sure doorbells don't leak out of SQ spinlock
@@ -4188,7 +4217,7 @@ struct ib_wq *mlx4_ib_create_wq(struct ib_pd *pd,
 		return ERR_PTR(-EOPNOTSUPP);
 	}
 
-	if (init_attr->create_flags) {
+	if (init_attr->create_flags & ~IB_WQ_FLAGS_SCATTER_FCS) {
 		pr_debug("unsupported create_flags %u\n",
 			 init_attr->create_flags);
 		return ERR_PTR(-EOPNOTSUPP);
@@ -4208,6 +4237,9 @@ struct ib_wq *mlx4_ib_create_wq(struct ib_pd *pd,
 	ib_qp_init_attr.cap.max_recv_sge = init_attr->max_sge;
 	ib_qp_init_attr.recv_cq = init_attr->cq;
 	ib_qp_init_attr.send_cq = ib_qp_init_attr.recv_cq; /* Dummy CQ */
+
+	if (init_attr->create_flags & IB_WQ_FLAGS_SCATTER_FCS)
+		ib_qp_init_attr.create_flags |= IB_QP_CREATE_SCATTER_FCS;
 
 	err = create_qp_common(dev, pd, MLX4_IB_RWQ_SRC, &ib_qp_init_attr,
 			       udata, 0, &qp);

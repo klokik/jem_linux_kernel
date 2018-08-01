@@ -139,7 +139,7 @@ static int create_xattr(struct ubifs_info *c, struct inode *host,
 	inode->i_op = &empty_iops;
 	inode->i_fop = &empty_fops;
 
-	inode->i_flags |= S_SYNC | S_NOATIME | S_NOCMTIME | S_NOQUOTA;
+	inode->i_flags |= S_SYNC | S_NOATIME | S_NOCMTIME;
 	ui = ubifs_inode(inode);
 	ui->xattr = 1;
 	ui->flags |= UBIFS_XATTR_FL;
@@ -381,8 +381,6 @@ ssize_t ubifs_xattr_get(struct inode *host, const char *name, void *buf,
 	if (buf) {
 		/* If @buf is %NULL we are supposed to return the length */
 		if (ui->data_len > size) {
-			ubifs_err(c, "buffer size %zd, xattr len %d",
-				  size, ui->data_len);
 			err = -ERANGE;
 			goto out_iput;
 		}

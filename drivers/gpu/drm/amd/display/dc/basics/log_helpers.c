@@ -83,22 +83,17 @@ void dc_conn_log(struct dc_context *ctx,
 			link->link_index);
 
 	va_start(args, msg);
-	entry.buf_offset += dm_log_to_buffer(
-		&entry.buf[entry.buf_offset],
-		LOG_MAX_LINE_SIZE - entry.buf_offset,
-		msg, args);
+	dm_logger_append_va(&entry, msg, args);
 
-	if (entry.buf[strlen(entry.buf) - 1] == '\n') {
-		entry.buf[strlen(entry.buf) - 1] = '\0';
+	if (entry.buf_offset > 0 &&
+	    entry.buf[entry.buf_offset - 1] == '\n')
 		entry.buf_offset--;
-	}
 
 	if (hex_data)
 		for (i = 0; i < hex_data_count; i++)
 			dm_logger_append(&entry, "%2.2X ", hex_data[i]);
 
 	dm_logger_append(&entry, "^\n");
-	dm_helpers_dc_conn_log(ctx, &entry, event);
 
 fail:
 	dm_logger_close(&entry);

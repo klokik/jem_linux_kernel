@@ -8,6 +8,7 @@
  * Copyright 2007, Michael Wu <flamingice@sourmilk.net>
  * Copyright 2007-2010, Intel Corporation
  * Copyright(c) 2015-2017 Intel Deutschland GmbH
+ * Copyright (C) 2018 Intel Corporation
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -392,7 +393,8 @@ int ___ieee80211_stop_tx_ba_session(struct sta_info *sta, u16 tid,
 	 * telling the driver. New packets will not go through since
 	 * the aggregation session is no longer OPERATIONAL.
 	 */
-	synchronize_net();
+	if (!local->in_reconfig)
+		synchronize_net();
 
 	tid_tx->stop_initiator = reason == AGG_STOP_PEER_REQUEST ?
 					WLAN_BACK_RECIPIENT :
@@ -429,18 +431,12 @@ int ___ieee80211_stop_tx_ba_session(struct sta_info *sta, u16 tid,
  */
 static void sta_addba_resp_timer_expired(struct timer_list *t)
 {
-	struct tid_ampdu_tx *tid_tx_timer =
-		from_timer(tid_tx_timer, t, addba_resp_timer);
-	struct sta_info *sta = tid_tx_timer->sta;
-	u8 tid = tid_tx_timer->tid;
-	struct tid_ampdu_tx *tid_tx;
+	struct tid_ampdu_tx *tid_tx = from_timer(tid_tx, t, addba_resp_timer);
+	struct sta_info *sta = tid_tx->sta;
+	u8 tid = tid_tx->tid;
 
 	/* check if the TID waits for addBA response */
-	rcu_read_lock();
-	tid_tx = rcu_dereference(sta->ampdu_mlme.tid_tx[tid]);
-	if (!tid_tx ||
-	    test_bit(HT_AGG_STATE_RESPONSE_RECEIVED, &tid_tx->state)) {
-		rcu_read_unlock();
+	if (test_bit(HT_AGG_STATE_RESPONSE_RECEIVED, &tid_tx->state)) {
 		ht_dbg(sta->sdata,
 		       "timer expired on %pM tid %d not expecting addBA response\n",
 		       sta->sta.addr, tid);
@@ -451,7 +447,6 @@ static void sta_addba_resp_timer_expired(struct timer_list *t)
 	       sta->sta.addr, tid);
 
 	ieee80211_stop_tx_ba_session(&sta->sta, tid);
-	rcu_read_unlock();
 }
 
 void ieee80211_tx_ba_session_handle_start(struct sta_info *sta, int tid)
@@ -529,28 +524,20 @@ void ieee80211_tx_ba_session_handle_start(struct sta_info *sta, int tid)
  */
 static void sta_tx_agg_session_timer_expired(struct timer_list *t)
 {
-	struct tid_ampdu_tx *tid_tx_timer =
-		from_timer(tid_tx_timer, t, session_timer);
-	struct sta_info *sta = tid_tx_timer->sta;
-	u8 tid = tid_tx_timer->tid;
-	struct tid_ampdu_tx *tid_tx;
+	struct tid_ampdu_tx *tid_tx = from_timer(tid_tx, t, session_timer);
+	struct sta_info *sta = tid_tx->sta;
+	u8 tid = tid_tx->tid;
 	unsigned long timeout;
 
-	rcu_read_lock();
-	tid_tx = rcu_dereference(sta->ampdu_mlme.tid_tx[tid]);
-	if (!tid_tx || test_bit(HT_AGG_STATE_STOPPING, &tid_tx->state)) {
-		rcu_read_unlock();
+	if (test_bit(HT_AGG_STATE_STOPPING, &tid_tx->state)) {
 		return;
 	}
 
 	timeout = tid_tx->last_tx + TU_TO_JIFFIES(tid_tx->timeout);
 	if (time_is_after_jiffies(timeout)) {
 		mod_timer(&tid_tx->session_timer, timeout);
-		rcu_read_unlock();
 		return;
 	}
-
-	rcu_read_unlock();
 
 	ht_dbg(sta->sdata, "tx session timer expired on %pM tid %d\n",
 	       sta->sta.addr, tid);
@@ -983,6 +970,9 @@ void ieee80211_process_addba_resp(struct ieee80211_local *local,
 			ieee80211_agg_tx_operational(local, sta, tid);
 
 		sta->ampdu_mlme.addba_req_num[tid] = 0;
+
+		tid_tx->timeout =
+			le16_to_cpu(mgmt->u.action.u.addba_resp.timeout);
 
 		if (tid_tx->timeout) {
 			mod_timer(&tid_tx->session_timer,

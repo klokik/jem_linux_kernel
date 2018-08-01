@@ -71,25 +71,7 @@ static struct rsnd_mod mem = {
 static void __rsnd_dmaen_complete(struct rsnd_mod *mod,
 				  struct rsnd_dai_stream *io)
 {
-	struct rsnd_priv *priv = rsnd_mod_to_priv(mod);
-	bool elapsed = false;
-	unsigned long flags;
-
-	/*
-	 * Renesas sound Gen1 needs 1 DMAC,
-	 * Gen2 needs 2 DMAC.
-	 * In Gen2 case, it are Audio-DMAC, and Audio-DMAC-peri-peri.
-	 * But, Audio-DMAC-peri-peri doesn't have interrupt,
-	 * and this driver is assuming that here.
-	 */
-	spin_lock_irqsave(&priv->lock, flags);
-
 	if (rsnd_io_is_working(io))
-		elapsed = true;
-
-	spin_unlock_irqrestore(&priv->lock, flags);
-
-	if (elapsed)
 		rsnd_dai_period_elapsed(io);
 }
 
@@ -270,6 +252,13 @@ static int rsnd_dmaen_attach(struct rsnd_dai_stream *io,
 		 */
 		return -EAGAIN;
 	}
+
+	/*
+	 * use it for IPMMU if needed
+	 * see
+	 *	rsnd_preallocate_pages()
+	 */
+	io->dmac_dev = chan->device->dev;
 
 	dma_release_channel(chan);
 
@@ -713,7 +702,7 @@ static int rsnd_dma_alloc(struct rsnd_dai_stream *io, struct rsnd_mod *mod,
 
 	rsnd_dma_of_path(mod, io, is_play, &mod_from, &mod_to);
 
-	/* for Gen2 */
+	/* for Gen2 or later */
 	if (mod_from && mod_to) {
 		ops	= &rsnd_dmapp_ops;
 		attach	= rsnd_dmapp_attach;
@@ -791,7 +780,7 @@ int rsnd_dma_probe(struct rsnd_priv *priv)
 		return 0;
 
 	/*
-	 * for Gen2
+	 * for Gen2 or later
 	 */
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "audmapp");
 	dmac = devm_kzalloc(dev, sizeof(*dmac), GFP_KERNEL);

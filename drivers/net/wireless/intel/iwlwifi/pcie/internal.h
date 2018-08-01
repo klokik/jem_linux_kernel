@@ -383,7 +383,8 @@ struct iwl_self_init_dram {
  * @hw_init_mask: initial unmasked hw causes
  * @fh_mask: current unmasked fh causes
  * @hw_mask: current unmasked hw causes
- * @tx_cmd_queue_size: the size of the tx command queue
+ * @in_rescan: true if we have triggered a device rescan
+ * @scheduled_for_removal: true if we have scheduled a device removal
  */
 struct iwl_trans_pcie {
 	struct iwl_rxq *rxq;
@@ -466,6 +467,8 @@ struct iwl_trans_pcie {
 	u32 hw_mask;
 	cpumask_t affinity_mask[IWL_MAX_RX_HW_QUEUES];
 	u16 tx_cmd_queue_size;
+	bool in_rescan;
+	bool scheduled_for_removal;
 };
 
 static inline struct iwl_trans_pcie *
@@ -537,7 +540,6 @@ void iwl_pcie_hcmd_complete(struct iwl_trans *trans,
 void iwl_trans_pcie_reclaim(struct iwl_trans *trans, int txq_id, int ssn,
 			    struct sk_buff_head *skbs);
 void iwl_trans_pcie_tx_reset(struct iwl_trans *trans);
-void iwl_pcie_set_tx_cmd_queue_size(struct iwl_trans *trans);
 
 static inline u16 iwl_pcie_tfd_tb_get_len(struct iwl_trans *trans, void *_tfd,
 					  u8 idx)
@@ -658,23 +660,20 @@ static inline void iwl_enable_fw_load_int(struct iwl_trans *trans)
 	}
 }
 
-static inline void iwl_pcie_sw_reset(struct iwl_trans *trans)
-{
-	/* Reset entire device - do controller reset (results in SHRD_HW_RST) */
-	iwl_set_bit(trans, CSR_RESET, CSR_RESET_REG_FLAG_SW_RESET);
-	usleep_range(5000, 6000);
-}
-
 static inline u8 iwl_pcie_get_cmd_index(struct iwl_txq *q, u32 index)
 {
 	return index & (q->n_window - 1);
 }
 
-static inline void *iwl_pcie_get_tfd(struct iwl_trans_pcie *trans_pcie,
+static inline void *iwl_pcie_get_tfd(struct iwl_trans *trans,
 				     struct iwl_txq *txq, int idx)
 {
-	return txq->tfds + trans_pcie->tfd_size * iwl_pcie_get_cmd_index(txq,
-									 idx);
+	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
+
+	if (trans->cfg->use_tfh)
+		idx = iwl_pcie_get_cmd_index(txq, idx);
+
+	return txq->tfds + trans_pcie->tfd_size * idx;
 }
 
 static inline void iwl_enable_rfkill_int(struct iwl_trans *trans)
@@ -825,7 +824,7 @@ int iwl_trans_pcie_gen2_start_fw(struct iwl_trans *trans,
 void iwl_trans_pcie_gen2_fw_alive(struct iwl_trans *trans, u32 scd_addr);
 int iwl_trans_pcie_dyn_txq_alloc(struct iwl_trans *trans,
 				 struct iwl_tx_queue_cfg_cmd *cmd,
-				 int cmd_id,
+				 int cmd_id, int size,
 				 unsigned int timeout);
 void iwl_trans_pcie_dyn_txq_free(struct iwl_trans *trans, int queue);
 int iwl_trans_pcie_gen2_tx(struct iwl_trans *trans, struct sk_buff *skb,

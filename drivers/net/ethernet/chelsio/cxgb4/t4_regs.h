@@ -45,6 +45,9 @@
 #define PF_BASE(idx) (PF0_BASE + (idx) * PF_STRIDE)
 #define PF_REG(idx, reg) (PF_BASE(idx) + (reg))
 
+#define NUM_CIM_CTL_TSCH_CHANNEL_INSTANCES 4
+#define NUM_CIM_CTL_TSCH_CHANNEL_TSCH_CLASS_INSTANCES 16
+
 #define MYPORT_BASE 0x1c000
 #define MYPORT_REG(reg_addr) (MYPORT_BASE + (reg_addr))
 
@@ -961,6 +964,10 @@
 
 #define MA_EXT_MEMORY1_BAR_A 0x7808
 
+#define HMA_MUX_S    5
+#define HMA_MUX_V(x) ((x) << HMA_MUX_S)
+#define HMA_MUX_F    HMA_MUX_V(1U)
+
 #define EXT_MEM1_BASE_S    16
 #define EXT_MEM1_BASE_M    0xfffU
 #define EXT_MEM1_BASE_G(x) (((x) >> EXT_MEM1_BASE_S) & EXT_MEM1_BASE_M)
@@ -1590,6 +1597,10 @@
 #define VNIC_S    11
 #define VNIC_V(x) ((x) << VNIC_S)
 #define VNIC_F    VNIC_V(1U)
+
+#define USE_ENC_IDX_S		13
+#define USE_ENC_IDX_V(x)	((x) << USE_ENC_IDX_S)
+#define USE_ENC_IDX_F		USE_ENC_IDX_V(1U)
 
 #define CSUM_HAS_PSEUDO_HDR_S    10
 #define CSUM_HAS_PSEUDO_HDR_V(x) ((x) << CSUM_HAS_PSEUDO_HDR_S)
@@ -2504,6 +2515,28 @@
 #define MPS_RX_MAC_BG_PG_CNT0_A 0x11208
 #define MPS_RX_LPBK_BG_PG_CNT0_A 0x11218
 
+#define MPS_RX_VXLAN_TYPE_A 0x11234
+
+#define VXLAN_EN_S    16
+#define VXLAN_EN_V(x) ((x) << VXLAN_EN_S)
+#define VXLAN_EN_F    VXLAN_EN_V(1U)
+
+#define VXLAN_S    0
+#define VXLAN_M    0xffffU
+#define VXLAN_V(x) ((x) << VXLAN_S)
+#define VXLAN_G(x) (((x) >> VXLAN_S) & VXLAN_M)
+
+#define MPS_RX_GENEVE_TYPE_A 0x11238
+
+#define GENEVE_EN_S    16
+#define GENEVE_EN_V(x) ((x) << GENEVE_EN_S)
+#define GENEVE_EN_F    GENEVE_EN_V(1U)
+
+#define GENEVE_S    0
+#define GENEVE_M    0xffffU
+#define GENEVE_V(x) ((x) << GENEVE_S)
+#define GENEVE_G(x) (((x) >> GENEVE_S) & GENEVE_M)
+
 #define MPS_CLS_TCAM_Y_L_A 0xf000
 #define MPS_CLS_TCAM_DATA0_A 0xf000
 #define MPS_CLS_TCAM_DATA1_A 0xf004
@@ -2530,7 +2563,13 @@
 
 #define DATAPORTNUM_S    12
 #define DATAPORTNUM_M    0xfU
+#define DATAPORTNUM_V(x) ((x) << DATAPORTNUM_S)
 #define DATAPORTNUM_G(x) (((x) >> DATAPORTNUM_S) & DATAPORTNUM_M)
+
+#define DATALKPTYPE_S    10
+#define DATALKPTYPE_M    0x3U
+#define DATALKPTYPE_V(x) ((x) << DATALKPTYPE_S)
+#define DATALKPTYPE_G(x) (((x) >> DATALKPTYPE_S) & DATALKPTYPE_M)
 
 #define DATADIPHIT_S    8
 #define DATADIPHIT_V(x) ((x) << DATADIPHIT_S)
@@ -2740,6 +2779,8 @@
 #define ULP_RX_LA_RDPTR_A 0x19240
 #define ULP_RX_LA_RDDATA_A 0x19244
 #define ULP_RX_LA_WRPTR_A 0x19248
+#define ULP_RX_TLS_KEY_LLIMIT_A 0x192ac
+#define ULP_RX_TLS_KEY_ULIMIT_A 0x192b0
 
 #define HPZ3_S    24
 #define HPZ3_V(x) ((x) << HPZ3_S)
@@ -2958,6 +2999,7 @@
 #define LE_DB_HASH_TID_BASE_A 0x19c30
 #define LE_DB_HASH_TBL_BASE_ADDR_A 0x19c30
 #define LE_DB_INT_CAUSE_A 0x19c3c
+#define LE_DB_CLCAM_TID_BASE_A 0x19df4
 #define LE_DB_TID_HASHBASE_A 0x19df8
 #define T6_LE_DB_HASH_TID_BASE_A 0x19df8
 

@@ -125,9 +125,9 @@ struct r5l_log {
 	struct list_head no_mem_stripes;   /* pending stripes, -ENOMEM */
 
 	struct kmem_cache *io_kc;
-	mempool_t *io_pool;
-	struct bio_set *bs;
-	mempool_t *meta_pool;
+	mempool_t io_pool;
+	struct bio_set bs;
+	mempool_t meta_pool;
 
 	struct md_thread *reclaim_thread;
 	unsigned long reclaim_target;	/* number of space that need to be
@@ -579,7 +579,7 @@ static void r5l_log_endio(struct bio *bio)
 		md_error(log->rdev->mddev, log->rdev);
 
 	bio_put(bio);
-	mempool_free(io->meta_page, log->meta_pool);
+	mempool_free(io->meta_page, &log->meta_pool);
 
 	spin_lock_irqsave(&log->io_list_lock, flags);
 	__r5l_set_io_unit_state(io, IO_UNIT_IO_END);
@@ -748,7 +748,7 @@ static void r5l_submit_current_io(struct r5l_log *log)
 
 static struct bio *r5l_bio_alloc(struct r5l_log *log)
 {
-	struct bio *bio = bio_alloc_bioset(GFP_NOIO, BIO_MAX_PAGES, log->bs);
+	struct bio *bio = bio_alloc_bioset(GFP_NOIO, BIO_MAX_PAGES, &log->bs);
 
 	bio_set_op_attrs(bio, REQ_OP_WRITE, 0);
 	bio_set_dev(bio, log->rdev->bdev);
@@ -780,7 +780,7 @@ static struct r5l_io_unit *r5l_new_meta(struct r5l_log *log)
 	struct r5l_io_unit *io;
 	struct r5l_meta_block *block;
 
-	io = mempool_alloc(log->io_pool, GFP_ATOMIC);
+	io = mempool_alloc(&log->io_pool, GFP_ATOMIC);
 	if (!io)
 		return NULL;
 	memset(io, 0, sizeof(*io));
@@ -791,7 +791,7 @@ static struct r5l_io_unit *r5l_new_meta(struct r5l_log *log)
 	bio_list_init(&io->flush_barriers);
 	io->state = IO_UNIT_RUNNING;
 
-	io->meta_page = mempool_alloc(log->meta_pool, GFP_NOIO);
+	io->meta_page = mempool_alloc(&log->meta_pool, GFP_NOIO);
 	block = page_address(io->meta_page);
 	clear_page(block);
 	block->magic = cpu_to_le32(R5LOG_MAGIC);
@@ -1111,9 +1111,6 @@ void r5l_write_stripe_run(struct r5l_log *log)
 
 int r5l_handle_flush_request(struct r5l_log *log, struct bio *bio)
 {
-	if (!log)
-		return -ENODEV;
-
 	if (log->r5c_journal_mode == R5C_JOURNAL_MODE_WRITE_THROUGH) {
 		/*
 		 * in write through (journal only)
@@ -1226,7 +1223,7 @@ static bool r5l_complete_finished_ios(struct r5l_log *log)
 		log->next_checkpoint = io->log_start;
 
 		list_del(&io->log_sibling);
-		mempool_free(io, log->io_pool);
+		mempool_free(io, &log->io_pool);
 		r5l_run_no_mem_stripe(log);
 
 		found = true;
@@ -1592,8 +1589,6 @@ void r5l_wake_reclaim(struct r5l_log *log, sector_t space)
 void r5l_quiesce(struct r5l_log *log, int quiesce)
 {
 	struct mddev *mddev;
-	if (!log)
-		return;
 
 	if (quiesce) {
 		/* make sure r5l_write_super_and_discard_space exits */
@@ -1652,7 +1647,7 @@ static int r5l_recovery_allocate_ra_pool(struct r5l_log *log,
 {
 	struct page *page;
 
-	ctx->ra_bio = bio_alloc_bioset(GFP_KERNEL, BIO_MAX_PAGES, log->bs);
+	ctx->ra_bio = bio_alloc_bioset(GFP_KERNEL, BIO_MAX_PAGES, &log->bs);
 	if (!ctx->ra_bio)
 		return -ENOMEM;
 
@@ -2448,7 +2443,6 @@ static void r5c_recovery_flush_data_only_stripes(struct r5l_log *log,
 		raid5_release_stripe(sh);
 	}
 
-	md_wakeup_thread(conf->mddev->thread);
 	/* reuse conf->wait_for_quiescent in recovery */
 	wait_event(conf->wait_for_quiescent,
 		   atomic_read(&conf->active_stripes) == 0);
@@ -2491,10 +2485,10 @@ static int r5l_recovery_log(struct r5l_log *log)
 	ctx->seq += 10000;
 
 	if ((ctx->data_only_stripes == 0) && (ctx->data_parity_stripes == 0))
-		pr_debug("md/raid:%s: starting from clean shutdown\n",
+		pr_info("md/raid:%s: starting from clean shutdown\n",
 			 mdname(mddev));
 	else
-		pr_debug("md/raid:%s: recovering %d data-only stripes and %d data-parity stripes\n",
+		pr_info("md/raid:%s: recovering %d data-only stripes and %d data-parity stripes\n",
 			 mdname(mddev), ctx->data_only_stripes,
 			 ctx->data_parity_stripes);
 
@@ -3036,6 +3030,23 @@ ioerr:
 	return ret;
 }
 
+int r5l_start(struct r5l_log *log)
+{
+	int ret;
+
+	if (!log)
+		return 0;
+
+	ret = r5l_load_log(log);
+	if (ret) {
+		struct mddev *mddev = log->rdev->mddev;
+		struct r5conf *conf = mddev->private;
+
+		r5l_exit_log(conf);
+	}
+	return ret;
+}
+
 void r5c_update_on_rdev_error(struct mddev *mddev, struct md_rdev *rdev)
 {
 	struct r5conf *conf = mddev->private;
@@ -3055,6 +3066,7 @@ int r5l_init_log(struct r5conf *conf, struct md_rdev *rdev)
 	struct request_queue *q = bdev_get_queue(rdev->bdev);
 	struct r5l_log *log;
 	char b[BDEVNAME_SIZE];
+	int ret;
 
 	pr_debug("md/raid:%s: using device %s as journal\n",
 		 mdname(conf->mddev), bdevname(rdev->bdev, b));
@@ -3100,16 +3112,16 @@ int r5l_init_log(struct r5conf *conf, struct md_rdev *rdev)
 	if (!log->io_kc)
 		goto io_kc;
 
-	log->io_pool = mempool_create_slab_pool(R5L_POOL_SIZE, log->io_kc);
-	if (!log->io_pool)
+	ret = mempool_init_slab_pool(&log->io_pool, R5L_POOL_SIZE, log->io_kc);
+	if (ret)
 		goto io_pool;
 
-	log->bs = bioset_create(R5L_POOL_SIZE, 0, BIOSET_NEED_BVECS);
-	if (!log->bs)
+	ret = bioset_init(&log->bs, R5L_POOL_SIZE, 0, BIOSET_NEED_BVECS);
+	if (ret)
 		goto io_bs;
 
-	log->meta_pool = mempool_create_page_pool(R5L_POOL_SIZE, 0);
-	if (!log->meta_pool)
+	ret = mempool_init_page_pool(&log->meta_pool, R5L_POOL_SIZE, 0);
+	if (ret)
 		goto out_mempool;
 
 	spin_lock_init(&log->tree_lock);
@@ -3138,21 +3150,17 @@ int r5l_init_log(struct r5conf *conf, struct md_rdev *rdev)
 
 	rcu_assign_pointer(conf->log, log);
 
-	if (r5l_load_log(log))
-		goto error;
-
 	set_bit(MD_HAS_JOURNAL, &conf->mddev->flags);
 	return 0;
 
-error:
 	rcu_assign_pointer(conf->log, NULL);
 	md_unregister_thread(&log->reclaim_thread);
 reclaim_thread:
-	mempool_destroy(log->meta_pool);
+	mempool_exit(&log->meta_pool);
 out_mempool:
-	bioset_free(log->bs);
+	bioset_exit(&log->bs);
 io_bs:
-	mempool_destroy(log->io_pool);
+	mempool_exit(&log->io_pool);
 io_pool:
 	kmem_cache_destroy(log->io_kc);
 io_kc:
@@ -3171,9 +3179,9 @@ void r5l_exit_log(struct r5conf *conf)
 	wake_up(&conf->mddev->sb_wait);
 	flush_work(&log->disable_writeback_work);
 	md_unregister_thread(&log->reclaim_thread);
-	mempool_destroy(log->meta_pool);
-	bioset_free(log->bs);
-	mempool_destroy(log->io_pool);
+	mempool_exit(&log->meta_pool);
+	bioset_exit(&log->bs);
+	mempool_exit(&log->io_pool);
 	kmem_cache_destroy(log->io_kc);
 	kfree(log);
 }

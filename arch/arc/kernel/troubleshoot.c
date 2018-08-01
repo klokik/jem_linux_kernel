@@ -10,7 +10,6 @@
 #include <linux/mm.h>
 #include <linux/fs.h>
 #include <linux/kdev_t.h>
-#include <linux/fs_struct.h>
 #include <linux/proc_fs.h>
 #include <linux/file.h>
 #include <linux/sched/mm.h>
@@ -163,6 +162,9 @@ static void show_ecr_verbose(struct pt_regs *regs)
 		else
 			pr_cont("Bus Error, check PRM\n");
 #endif
+	} else if (vec == ECR_V_TRAP) {
+		if (regs->ecr_param == 5)
+			pr_cont("gcc generated __builtin_trap\n");
 	} else {
 		pr_cont("Check Programmer's Manual\n");
 	}

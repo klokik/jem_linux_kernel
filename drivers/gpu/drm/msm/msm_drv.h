@@ -51,7 +51,6 @@ struct msm_rd_state;
 struct msm_perf_state;
 struct msm_gem_submit;
 struct msm_fence_context;
-struct msm_fence_cb;
 struct msm_gem_address_space;
 struct msm_gem_vma;
 
@@ -118,10 +117,6 @@ struct msm_drm_private {
 	struct workqueue_struct *wq;
 	struct workqueue_struct *atomic_wq;
 
-	/* crtcs pending async atomic updates: */
-	uint32_t pending_crtcs;
-	wait_queue_head_t pending_crtcs_event;
-
 	unsigned int num_planes;
 	struct drm_plane *planes[16];
 
@@ -161,8 +156,9 @@ struct msm_format {
 	uint32_t pixel_format;
 };
 
-int msm_atomic_commit(struct drm_device *dev,
-		struct drm_atomic_state *state, bool nonblock);
+int msm_atomic_prepare_fb(struct drm_plane *plane,
+			  struct drm_plane_state *new_state);
+void msm_atomic_commit_tail(struct drm_atomic_state *state);
 struct drm_atomic_state *msm_atomic_state_alloc(struct drm_device *dev);
 void msm_atomic_state_clear(struct drm_atomic_state *state);
 void msm_atomic_state_free(struct drm_atomic_state *state);
@@ -303,7 +299,8 @@ int msm_perf_debugfs_init(struct drm_minor *minor);
 void msm_perf_debugfs_cleanup(struct msm_drm_private *priv);
 #else
 static inline int msm_debugfs_late_init(struct drm_device *dev) { return 0; }
-static inline void msm_rd_dump_submit(struct msm_gem_submit *submit) {}
+static inline void msm_rd_dump_submit(struct msm_rd_state *rd, struct msm_gem_submit *submit,
+		const char *fmt, ...) {}
 static inline void msm_rd_debugfs_cleanup(struct msm_drm_private *priv) {}
 static inline void msm_perf_debugfs_cleanup(struct msm_drm_private *priv) {}
 #endif

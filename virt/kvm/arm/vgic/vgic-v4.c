@@ -118,7 +118,7 @@ int vgic_v4_init(struct kvm *kvm)
 	struct kvm_vcpu *vcpu;
 	int i, nr_vcpus, ret;
 
-	if (!vgic_supports_direct_msis(kvm))
+	if (!kvm_vgic_global_state.has_gicv4)
 		return 0; /* Nothing to see here... move along. */
 
 	if (dist->its_vm.vpes)
@@ -126,7 +126,7 @@ int vgic_v4_init(struct kvm *kvm)
 
 	nr_vcpus = atomic_read(&kvm->online_vcpus);
 
-	dist->its_vm.vpes = kzalloc(sizeof(*dist->its_vm.vpes) * nr_vcpus,
+	dist->its_vm.vpes = kcalloc(nr_vcpus, sizeof(*dist->its_vm.vpes),
 				    GFP_KERNEL);
 	if (!dist->its_vm.vpes)
 		return -ENOMEM;

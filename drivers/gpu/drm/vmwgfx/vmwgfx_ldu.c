@@ -266,8 +266,8 @@ static const struct drm_connector_funcs vmw_legacy_connector_funcs = {
 	.set_property = vmw_du_connector_set_property,
 	.destroy = vmw_ldu_connector_destroy,
 	.reset = vmw_du_connector_reset,
-	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
-	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
+	.atomic_duplicate_state = vmw_du_connector_duplicate_state,
+	.atomic_destroy_state = vmw_du_connector_destroy_state,
 	.atomic_set_property = vmw_du_connector_atomic_set_property,
 	.atomic_get_property = vmw_du_connector_atomic_get_property,
 };
@@ -280,39 +280,6 @@ drm_connector_helper_funcs vmw_ldu_connector_helper_funcs = {
 /*
  * Legacy Display Plane Functions
  */
-
-/**
- * vmw_ldu_primary_plane_cleanup_fb - Noop
- *
- * @plane:  display plane
- * @old_state: Contains the FB to clean up
- *
- * Unpins the display surface
- *
- * Returns 0 on success
- */
-static void
-vmw_ldu_primary_plane_cleanup_fb(struct drm_plane *plane,
-				 struct drm_plane_state *old_state)
-{
-}
-
-
-/**
- * vmw_ldu_primary_plane_prepare_fb - Noop
- *
- * @plane:  display plane
- * @new_state: info on the new plane state, including the FB
- *
- * Returns 0 on success
- */
-static int
-vmw_ldu_primary_plane_prepare_fb(struct drm_plane *plane,
-				 struct drm_plane_state *new_state)
-{
-	return 0;
-}
-
 
 static void
 vmw_ldu_primary_plane_atomic_update(struct drm_plane *plane,
@@ -373,8 +340,6 @@ static const struct
 drm_plane_helper_funcs vmw_ldu_primary_plane_helper_funcs = {
 	.atomic_check = vmw_du_primary_plane_atomic_check,
 	.atomic_update = vmw_ldu_primary_plane_atomic_update,
-	.prepare_fb = vmw_ldu_primary_plane_prepare_fb,
-	.cleanup_fb = vmw_ldu_primary_plane_cleanup_fb,
 };
 
 static const struct drm_crtc_helper_funcs vmw_ldu_crtc_helper_funcs = {

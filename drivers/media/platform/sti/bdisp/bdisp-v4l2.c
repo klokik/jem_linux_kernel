@@ -1,7 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) STMicroelectronics SA 2014
  * Authors: Fabien Dessenne <fabien.dessenne@st.com> for STMicroelectronics.
- * License terms:  GNU General Public License (GPL), version 2
  */
 
 #include <linux/errno.h>
@@ -1296,6 +1296,10 @@ static int bdisp_probe(struct platform_device *pdev)
 	bdisp = devm_kzalloc(dev, sizeof(struct bdisp_dev), GFP_KERNEL);
 	if (!bdisp)
 		return -ENOMEM;
+
+	ret = dma_coerce_mask_and_coherent(dev, DMA_BIT_MASK(32));
+	if (ret)
+		return ret;
 
 	bdisp->pdev = pdev;
 	bdisp->dev = dev;

@@ -28,20 +28,14 @@
 struct tcindex_filter_result {
 	struct tcf_exts		exts;
 	struct tcf_result	res;
-	union {
-		struct work_struct	work;
-		struct rcu_head		rcu;
-	};
+	struct rcu_work		rwork;
 };
 
 struct tcindex_filter {
 	u16 key;
 	struct tcindex_filter_result result;
 	struct tcindex_filter __rcu *next;
-	union {
-		struct work_struct work;
-		struct rcu_head rcu;
-	};
+	struct rcu_work rwork;
 };
 
 
@@ -152,19 +146,12 @@ static void tcindex_destroy_rexts_work(struct work_struct *work)
 {
 	struct tcindex_filter_result *r;
 
-	r = container_of(work, struct tcindex_filter_result, work);
+	r = container_of(to_rcu_work(work),
+			 struct tcindex_filter_result,
+			 rwork);
 	rtnl_lock();
 	__tcindex_destroy_rexts(r);
 	rtnl_unlock();
-}
-
-static void tcindex_destroy_rexts(struct rcu_head *head)
-{
-	struct tcindex_filter_result *r;
-
-	r = container_of(head, struct tcindex_filter_result, rcu);
-	INIT_WORK(&r->work, tcindex_destroy_rexts_work);
-	tcf_queue_work(&r->work);
 }
 
 static void __tcindex_destroy_fexts(struct tcindex_filter *f)
@@ -176,24 +163,17 @@ static void __tcindex_destroy_fexts(struct tcindex_filter *f)
 
 static void tcindex_destroy_fexts_work(struct work_struct *work)
 {
-	struct tcindex_filter *f = container_of(work, struct tcindex_filter,
-						work);
+	struct tcindex_filter *f = container_of(to_rcu_work(work),
+						struct tcindex_filter,
+						rwork);
 
 	rtnl_lock();
 	__tcindex_destroy_fexts(f);
 	rtnl_unlock();
 }
 
-static void tcindex_destroy_fexts(struct rcu_head *head)
-{
-	struct tcindex_filter *f = container_of(head, struct tcindex_filter,
-						rcu);
-
-	INIT_WORK(&f->work, tcindex_destroy_fexts_work);
-	tcf_queue_work(&f->work);
-}
-
-static int tcindex_delete(struct tcf_proto *tp, void *arg, bool *last)
+static int tcindex_delete(struct tcf_proto *tp, void *arg, bool *last,
+			  struct netlink_ext_ack *extack)
 {
 	struct tcindex_data *p = rtnl_dereference(tp->root);
 	struct tcindex_filter_result *r = arg;
@@ -227,12 +207,12 @@ found:
 	 */
 	if (f) {
 		if (tcf_exts_get_net(&f->result.exts))
-			call_rcu(&f->rcu, tcindex_destroy_fexts);
+			tcf_queue_work(&f->rwork, tcindex_destroy_fexts_work);
 		else
 			__tcindex_destroy_fexts(f);
 	} else {
 		if (tcf_exts_get_net(&r->exts))
-			call_rcu(&r->rcu, tcindex_destroy_rexts);
+			tcf_queue_work(&r->rwork, tcindex_destroy_rexts_work);
 		else
 			__tcindex_destroy_rexts(r);
 	}
@@ -246,7 +226,7 @@ static int tcindex_destroy_element(struct tcf_proto *tp,
 {
 	bool last;
 
-	return tcindex_delete(tp, arg, &last);
+	return tcindex_delete(tp, arg, &last, NULL);
 }
 
 static void __tcindex_destroy(struct rcu_head *head)
@@ -322,7 +302,7 @@ static int
 tcindex_set_parms(struct net *net, struct tcf_proto *tp, unsigned long base,
 		  u32 handle, struct tcindex_data *p,
 		  struct tcindex_filter_result *r, struct nlattr **tb,
-		  struct nlattr *est, bool ovr)
+		  struct nlattr *est, bool ovr, struct netlink_ext_ack *extack)
 {
 	struct tcindex_filter_result new_filter_result, *old_r = r;
 	struct tcindex_filter_result cr;
@@ -334,7 +314,7 @@ tcindex_set_parms(struct net *net, struct tcf_proto *tp, unsigned long base,
 	err = tcf_exts_init(&e, TCA_TCINDEX_ACT, TCA_TCINDEX_POLICE);
 	if (err < 0)
 		return err;
-	err = tcf_exts_validate(net, tp, tb, est, &e, ovr);
+	err = tcf_exts_validate(net, tp, tb, est, &e, ovr, extack);
 	if (err < 0)
 		goto errout;
 
@@ -520,7 +500,8 @@ errout:
 static int
 tcindex_change(struct net *net, struct sk_buff *in_skb,
 	       struct tcf_proto *tp, unsigned long base, u32 handle,
-	       struct nlattr **tca, void **arg, bool ovr)
+	       struct nlattr **tca, void **arg, bool ovr,
+	       struct netlink_ext_ack *extack)
 {
 	struct nlattr *opt = tca[TCA_OPTIONS];
 	struct nlattr *tb[TCA_TCINDEX_MAX + 1];
@@ -540,7 +521,7 @@ tcindex_change(struct net *net, struct sk_buff *in_skb,
 		return err;
 
 	return tcindex_set_parms(net, tp, base, handle, p, r, tb,
-				 tca[TCA_RATE], ovr);
+				 tca[TCA_RATE], ovr, extack);
 }
 
 static void tcindex_walk(struct tcf_proto *tp, struct tcf_walker *walker)
@@ -579,7 +560,8 @@ static void tcindex_walk(struct tcf_proto *tp, struct tcf_walker *walker)
 	}
 }
 
-static void tcindex_destroy(struct tcf_proto *tp)
+static void tcindex_destroy(struct tcf_proto *tp,
+			    struct netlink_ext_ack *extack)
 {
 	struct tcindex_data *p = rtnl_dereference(tp->root);
 	struct tcf_walker walker;

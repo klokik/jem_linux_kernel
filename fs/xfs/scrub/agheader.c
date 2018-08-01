@@ -1,21 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright (C) 2017 Oracle.  All Rights Reserved.
- *
  * Author: Darrick J. Wong <darrick.wong@oracle.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it would be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write the Free Software Foundation,
- * Inc.,  51 Franklin St, Fifth Floor, Boston, MA  02110-1301, USA.
  */
 #include "xfs.h"
 #include "xfs_fs.h"
@@ -32,88 +18,43 @@
 #include "xfs_inode.h"
 #include "xfs_alloc.h"
 #include "xfs_ialloc.h"
+#include "xfs_rmap.h"
 #include "scrub/xfs_scrub.h"
 #include "scrub/scrub.h"
 #include "scrub/common.h"
 #include "scrub/trace.h"
 
-/*
- * Set up scrub to check all the static metadata in each AG.
- * This means the SB, AGF, AGI, and AGFL headers.
- */
-int
-xfs_scrub_setup_ag_header(
-	struct xfs_scrub_context	*sc,
-	struct xfs_inode		*ip)
-{
-	struct xfs_mount		*mp = sc->mp;
+/* Superblock */
 
-	if (sc->sm->sm_agno >= mp->m_sb.sb_agcount ||
-	    sc->sm->sm_ino || sc->sm->sm_gen)
-		return -EINVAL;
-	return xfs_scrub_setup_fs(sc, ip);
-}
-
-/* Walk all the blocks in the AGFL. */
-int
-xfs_scrub_walk_agfl(
+/* Cross-reference with the other btrees. */
+STATIC void
+xfs_scrub_superblock_xref(
 	struct xfs_scrub_context	*sc,
-	int				(*fn)(struct xfs_scrub_context *,
-					      xfs_agblock_t bno, void *),
-	void				*priv)
+	struct xfs_buf			*bp)
 {
-	struct xfs_agf			*agf;
-	__be32				*agfl_bno;
+	struct xfs_owner_info		oinfo;
 	struct xfs_mount		*mp = sc->mp;
-	unsigned int			flfirst;
-	unsigned int			fllast;
-	int				i;
+	xfs_agnumber_t			agno = sc->sm->sm_agno;
+	xfs_agblock_t			agbno;
 	int				error;
 
-	agf = XFS_BUF_TO_AGF(sc->sa.agf_bp);
-	agfl_bno = XFS_BUF_TO_AGFL_BNO(mp, sc->sa.agfl_bp);
-	flfirst = be32_to_cpu(agf->agf_flfirst);
-	fllast = be32_to_cpu(agf->agf_fllast);
+	if (sc->sm->sm_flags & XFS_SCRUB_OFLAG_CORRUPT)
+		return;
 
-	/* Nothing to walk in an empty AGFL. */
-	if (agf->agf_flcount == cpu_to_be32(0))
-		return 0;
+	agbno = XFS_SB_BLOCK(mp);
 
-	/* first to last is a consecutive list. */
-	if (fllast >= flfirst) {
-		for (i = flfirst; i <= fllast; i++) {
-			error = fn(sc, be32_to_cpu(agfl_bno[i]), priv);
-			if (error)
-				return error;
-			if (sc->sm->sm_flags & XFS_SCRUB_OFLAG_CORRUPT)
-				return error;
-		}
+	error = xfs_scrub_ag_init(sc, agno, &sc->sa);
+	if (!xfs_scrub_xref_process_error(sc, agno, agbno, &error))
+		return;
 
-		return 0;
-	}
+	xfs_scrub_xref_is_used_space(sc, agbno, 1);
+	xfs_scrub_xref_is_not_inode_chunk(sc, agbno, 1);
+	xfs_rmap_ag_owner(&oinfo, XFS_RMAP_OWN_FS);
+	xfs_scrub_xref_is_owned_by(sc, agbno, 1, &oinfo);
+	xfs_scrub_xref_is_not_shared(sc, agbno, 1);
 
-	/* first to the end */
-	for (i = flfirst; i < XFS_AGFL_SIZE(mp); i++) {
-		error = fn(sc, be32_to_cpu(agfl_bno[i]), priv);
-		if (error)
-			return error;
-		if (sc->sm->sm_flags & XFS_SCRUB_OFLAG_CORRUPT)
-			return error;
-	}
-
-	/* the start to last. */
-	for (i = 0; i <= fllast; i++) {
-		error = fn(sc, be32_to_cpu(agfl_bno[i]), priv);
-		if (error)
-			return error;
-		if (sc->sm->sm_flags & XFS_SCRUB_OFLAG_CORRUPT)
-			return error;
-	}
-
-	return 0;
+	/* scrub teardown will take care of sc->sa for us */
 }
-
-/* Superblock */
 
 /*
  * Scrub the filesystem superblock.
@@ -140,9 +81,23 @@ xfs_scrub_superblock(
 	if (agno == 0)
 		return 0;
 
-	error = xfs_trans_read_buf(mp, sc->tp, mp->m_ddev_targp,
-		  XFS_AGB_TO_DADDR(mp, agno, XFS_SB_BLOCK(mp)),
-		  XFS_FSS_TO_BB(mp, 1), 0, &bp, &xfs_sb_buf_ops);
+	error = xfs_sb_read_secondary(mp, sc->tp, agno, &bp);
+	/*
+	 * The superblock verifier can return several different error codes
+	 * if it thinks the superblock doesn't look right.  For a mount these
+	 * would all get bounced back to userspace, but if we're here then the
+	 * fs mounted successfully, which means that this secondary superblock
+	 * is simply incorrect.  Treat all these codes the same way we treat
+	 * any corruption.
+	 */
+	switch (error) {
+	case -EINVAL:	/* also -EWRONGFS */
+	case -ENOSYS:
+	case -EFBIG:
+		error = -EFSCORRUPTED;
+	default:
+		break;
+	}
 	if (!xfs_scrub_process_error(sc, agno, XFS_SB_BLOCK(mp), &error))
 		return error;
 
@@ -387,10 +342,174 @@ xfs_scrub_superblock(
 			BBTOB(bp->b_length) - sizeof(struct xfs_dsb)))
 		xfs_scrub_block_set_corrupt(sc, bp);
 
+	xfs_scrub_superblock_xref(sc, bp);
+
 	return error;
 }
 
 /* AGF */
+
+/* Tally freespace record lengths. */
+STATIC int
+xfs_scrub_agf_record_bno_lengths(
+	struct xfs_btree_cur		*cur,
+	struct xfs_alloc_rec_incore	*rec,
+	void				*priv)
+{
+	xfs_extlen_t			*blocks = priv;
+
+	(*blocks) += rec->ar_blockcount;
+	return 0;
+}
+
+/* Check agf_freeblks */
+static inline void
+xfs_scrub_agf_xref_freeblks(
+	struct xfs_scrub_context	*sc)
+{
+	struct xfs_agf			*agf = XFS_BUF_TO_AGF(sc->sa.agf_bp);
+	xfs_extlen_t			blocks = 0;
+	int				error;
+
+	if (!sc->sa.bno_cur)
+		return;
+
+	error = xfs_alloc_query_all(sc->sa.bno_cur,
+			xfs_scrub_agf_record_bno_lengths, &blocks);
+	if (!xfs_scrub_should_check_xref(sc, &error, &sc->sa.bno_cur))
+		return;
+	if (blocks != be32_to_cpu(agf->agf_freeblks))
+		xfs_scrub_block_xref_set_corrupt(sc, sc->sa.agf_bp);
+}
+
+/* Cross reference the AGF with the cntbt (freespace by length btree) */
+static inline void
+xfs_scrub_agf_xref_cntbt(
+	struct xfs_scrub_context	*sc)
+{
+	struct xfs_agf			*agf = XFS_BUF_TO_AGF(sc->sa.agf_bp);
+	xfs_agblock_t			agbno;
+	xfs_extlen_t			blocks;
+	int				have;
+	int				error;
+
+	if (!sc->sa.cnt_cur)
+		return;
+
+	/* Any freespace at all? */
+	error = xfs_alloc_lookup_le(sc->sa.cnt_cur, 0, -1U, &have);
+	if (!xfs_scrub_should_check_xref(sc, &error, &sc->sa.cnt_cur))
+		return;
+	if (!have) {
+		if (agf->agf_freeblks != be32_to_cpu(0))
+			xfs_scrub_block_xref_set_corrupt(sc, sc->sa.agf_bp);
+		return;
+	}
+
+	/* Check agf_longest */
+	error = xfs_alloc_get_rec(sc->sa.cnt_cur, &agbno, &blocks, &have);
+	if (!xfs_scrub_should_check_xref(sc, &error, &sc->sa.cnt_cur))
+		return;
+	if (!have || blocks != be32_to_cpu(agf->agf_longest))
+		xfs_scrub_block_xref_set_corrupt(sc, sc->sa.agf_bp);
+}
+
+/* Check the btree block counts in the AGF against the btrees. */
+STATIC void
+xfs_scrub_agf_xref_btreeblks(
+	struct xfs_scrub_context	*sc)
+{
+	struct xfs_agf			*agf = XFS_BUF_TO_AGF(sc->sa.agf_bp);
+	struct xfs_mount		*mp = sc->mp;
+	xfs_agblock_t			blocks;
+	xfs_agblock_t			btreeblks;
+	int				error;
+
+	/* Check agf_rmap_blocks; set up for agf_btreeblks check */
+	if (sc->sa.rmap_cur) {
+		error = xfs_btree_count_blocks(sc->sa.rmap_cur, &blocks);
+		if (!xfs_scrub_should_check_xref(sc, &error, &sc->sa.rmap_cur))
+			return;
+		btreeblks = blocks - 1;
+		if (blocks != be32_to_cpu(agf->agf_rmap_blocks))
+			xfs_scrub_block_xref_set_corrupt(sc, sc->sa.agf_bp);
+	} else {
+		btreeblks = 0;
+	}
+
+	/*
+	 * No rmap cursor; we can't xref if we have the rmapbt feature.
+	 * We also can't do it if we're missing the free space btree cursors.
+	 */
+	if ((xfs_sb_version_hasrmapbt(&mp->m_sb) && !sc->sa.rmap_cur) ||
+	    !sc->sa.bno_cur || !sc->sa.cnt_cur)
+		return;
+
+	/* Check agf_btreeblks */
+	error = xfs_btree_count_blocks(sc->sa.bno_cur, &blocks);
+	if (!xfs_scrub_should_check_xref(sc, &error, &sc->sa.bno_cur))
+		return;
+	btreeblks += blocks - 1;
+
+	error = xfs_btree_count_blocks(sc->sa.cnt_cur, &blocks);
+	if (!xfs_scrub_should_check_xref(sc, &error, &sc->sa.cnt_cur))
+		return;
+	btreeblks += blocks - 1;
+
+	if (btreeblks != be32_to_cpu(agf->agf_btreeblks))
+		xfs_scrub_block_xref_set_corrupt(sc, sc->sa.agf_bp);
+}
+
+/* Check agf_refcount_blocks against tree size */
+static inline void
+xfs_scrub_agf_xref_refcblks(
+	struct xfs_scrub_context	*sc)
+{
+	struct xfs_agf			*agf = XFS_BUF_TO_AGF(sc->sa.agf_bp);
+	xfs_agblock_t			blocks;
+	int				error;
+
+	if (!sc->sa.refc_cur)
+		return;
+
+	error = xfs_btree_count_blocks(sc->sa.refc_cur, &blocks);
+	if (!xfs_scrub_should_check_xref(sc, &error, &sc->sa.refc_cur))
+		return;
+	if (blocks != be32_to_cpu(agf->agf_refcount_blocks))
+		xfs_scrub_block_xref_set_corrupt(sc, sc->sa.agf_bp);
+}
+
+/* Cross-reference with the other btrees. */
+STATIC void
+xfs_scrub_agf_xref(
+	struct xfs_scrub_context	*sc)
+{
+	struct xfs_owner_info		oinfo;
+	struct xfs_mount		*mp = sc->mp;
+	xfs_agblock_t			agbno;
+	int				error;
+
+	if (sc->sm->sm_flags & XFS_SCRUB_OFLAG_CORRUPT)
+		return;
+
+	agbno = XFS_AGF_BLOCK(mp);
+
+	error = xfs_scrub_ag_btcur_init(sc, &sc->sa);
+	if (error)
+		return;
+
+	xfs_scrub_xref_is_used_space(sc, agbno, 1);
+	xfs_scrub_agf_xref_freeblks(sc);
+	xfs_scrub_agf_xref_cntbt(sc);
+	xfs_scrub_xref_is_not_inode_chunk(sc, agbno, 1);
+	xfs_rmap_ag_owner(&oinfo, XFS_RMAP_OWN_FS);
+	xfs_scrub_xref_is_owned_by(sc, agbno, 1, &oinfo);
+	xfs_scrub_agf_xref_btreeblks(sc);
+	xfs_scrub_xref_is_not_shared(sc, agbno, 1);
+	xfs_scrub_agf_xref_refcblks(sc);
+
+	/* scrub teardown will take care of sc->sa for us */
+}
 
 /* Scrub the AGF. */
 int
@@ -414,6 +533,7 @@ xfs_scrub_agf(
 			&sc->sa.agf_bp, &sc->sa.agfl_bp);
 	if (!xfs_scrub_process_error(sc, agno, XFS_AGF_BLOCK(sc->mp), &error))
 		goto out;
+	xfs_scrub_buffer_recheck(sc, sc->sa.agf_bp);
 
 	agf = XFS_BUF_TO_AGF(sc->sa.agf_bp);
 
@@ -466,10 +586,11 @@ xfs_scrub_agf(
 	if (agfl_last > agfl_first)
 		fl_count = agfl_last - agfl_first + 1;
 	else
-		fl_count = XFS_AGFL_SIZE(mp) - agfl_first + agfl_last + 1;
+		fl_count = xfs_agfl_size(mp) - agfl_first + agfl_last + 1;
 	if (agfl_count != 0 && fl_count != agfl_count)
 		xfs_scrub_block_set_corrupt(sc, sc->sa.agf_bp);
 
+	xfs_scrub_agf_xref(sc);
 out:
 	return error;
 }
@@ -477,20 +598,38 @@ out:
 /* AGFL */
 
 struct xfs_scrub_agfl_info {
+	struct xfs_owner_info		oinfo;
 	unsigned int			sz_entries;
 	unsigned int			nr_entries;
 	xfs_agblock_t			*entries;
+	struct xfs_scrub_context	*sc;
 };
+
+/* Cross-reference with the other btrees. */
+STATIC void
+xfs_scrub_agfl_block_xref(
+	struct xfs_scrub_context	*sc,
+	xfs_agblock_t			agbno,
+	struct xfs_owner_info		*oinfo)
+{
+	if (sc->sm->sm_flags & XFS_SCRUB_OFLAG_CORRUPT)
+		return;
+
+	xfs_scrub_xref_is_used_space(sc, agbno, 1);
+	xfs_scrub_xref_is_not_inode_chunk(sc, agbno, 1);
+	xfs_scrub_xref_is_owned_by(sc, agbno, 1, oinfo);
+	xfs_scrub_xref_is_not_shared(sc, agbno, 1);
+}
 
 /* Scrub an AGFL block. */
 STATIC int
 xfs_scrub_agfl_block(
-	struct xfs_scrub_context	*sc,
+	struct xfs_mount		*mp,
 	xfs_agblock_t			agbno,
 	void				*priv)
 {
-	struct xfs_mount		*mp = sc->mp;
 	struct xfs_scrub_agfl_info	*sai = priv;
+	struct xfs_scrub_context	*sc = sai->sc;
 	xfs_agnumber_t			agno = sc->sa.agno;
 
 	if (xfs_verify_agbno(mp, agno, agbno) &&
@@ -498,6 +637,11 @@ xfs_scrub_agfl_block(
 		sai->entries[sai->nr_entries++] = agbno;
 	else
 		xfs_scrub_block_set_corrupt(sc, sc->sa.agfl_bp);
+
+	xfs_scrub_agfl_block_xref(sc, agbno, priv);
+
+	if (sc->sm->sm_flags & XFS_SCRUB_OFLAG_CORRUPT)
+		return XFS_BTREE_QUERY_RANGE_ABORT;
 
 	return 0;
 }
@@ -513,12 +657,43 @@ xfs_scrub_agblock_cmp(
 	return (int)*a - (int)*b;
 }
 
+/* Cross-reference with the other btrees. */
+STATIC void
+xfs_scrub_agfl_xref(
+	struct xfs_scrub_context	*sc)
+{
+	struct xfs_owner_info		oinfo;
+	struct xfs_mount		*mp = sc->mp;
+	xfs_agblock_t			agbno;
+	int				error;
+
+	if (sc->sm->sm_flags & XFS_SCRUB_OFLAG_CORRUPT)
+		return;
+
+	agbno = XFS_AGFL_BLOCK(mp);
+
+	error = xfs_scrub_ag_btcur_init(sc, &sc->sa);
+	if (error)
+		return;
+
+	xfs_scrub_xref_is_used_space(sc, agbno, 1);
+	xfs_scrub_xref_is_not_inode_chunk(sc, agbno, 1);
+	xfs_rmap_ag_owner(&oinfo, XFS_RMAP_OWN_FS);
+	xfs_scrub_xref_is_owned_by(sc, agbno, 1, &oinfo);
+	xfs_scrub_xref_is_not_shared(sc, agbno, 1);
+
+	/*
+	 * Scrub teardown will take care of sc->sa for us.  Leave sc->sa
+	 * active so that the agfl block xref can use it too.
+	 */
+}
+
 /* Scrub the AGFL. */
 int
 xfs_scrub_agfl(
 	struct xfs_scrub_context	*sc)
 {
-	struct xfs_scrub_agfl_info	sai = { 0 };
+	struct xfs_scrub_agfl_info	sai;
 	struct xfs_agf			*agf;
 	xfs_agnumber_t			agno;
 	unsigned int			agflcount;
@@ -532,23 +707,38 @@ xfs_scrub_agfl(
 		goto out;
 	if (!sc->sa.agf_bp)
 		return -EFSCORRUPTED;
+	xfs_scrub_buffer_recheck(sc, sc->sa.agfl_bp);
+
+	xfs_scrub_agfl_xref(sc);
+
+	if (sc->sm->sm_flags & XFS_SCRUB_OFLAG_CORRUPT)
+		goto out;
 
 	/* Allocate buffer to ensure uniqueness of AGFL entries. */
 	agf = XFS_BUF_TO_AGF(sc->sa.agf_bp);
 	agflcount = be32_to_cpu(agf->agf_flcount);
-	if (agflcount > XFS_AGFL_SIZE(sc->mp)) {
+	if (agflcount > xfs_agfl_size(sc->mp)) {
 		xfs_scrub_block_set_corrupt(sc, sc->sa.agf_bp);
 		goto out;
 	}
+	memset(&sai, 0, sizeof(sai));
+	sai.sc = sc;
 	sai.sz_entries = agflcount;
-	sai.entries = kmem_zalloc(sizeof(xfs_agblock_t) * agflcount, KM_NOFS);
+	sai.entries = kmem_zalloc(sizeof(xfs_agblock_t) * agflcount,
+			KM_MAYFAIL);
 	if (!sai.entries) {
 		error = -ENOMEM;
 		goto out;
 	}
 
 	/* Check the blocks in the AGFL. */
-	error = xfs_scrub_walk_agfl(sc, xfs_scrub_agfl_block, &sai);
+	xfs_rmap_ag_owner(&sai.oinfo, XFS_RMAP_OWN_AG);
+	error = xfs_agfl_walk(sc->mp, XFS_BUF_TO_AGF(sc->sa.agf_bp),
+			sc->sa.agfl_bp, xfs_scrub_agfl_block, &sai);
+	if (error == XFS_BTREE_QUERY_RANGE_ABORT) {
+		error = 0;
+		goto out_free;
+	}
 	if (error)
 		goto out_free;
 
@@ -575,6 +765,56 @@ out:
 
 /* AGI */
 
+/* Check agi_count/agi_freecount */
+static inline void
+xfs_scrub_agi_xref_icounts(
+	struct xfs_scrub_context	*sc)
+{
+	struct xfs_agi			*agi = XFS_BUF_TO_AGI(sc->sa.agi_bp);
+	xfs_agino_t			icount;
+	xfs_agino_t			freecount;
+	int				error;
+
+	if (!sc->sa.ino_cur)
+		return;
+
+	error = xfs_ialloc_count_inodes(sc->sa.ino_cur, &icount, &freecount);
+	if (!xfs_scrub_should_check_xref(sc, &error, &sc->sa.ino_cur))
+		return;
+	if (be32_to_cpu(agi->agi_count) != icount ||
+	    be32_to_cpu(agi->agi_freecount) != freecount)
+		xfs_scrub_block_xref_set_corrupt(sc, sc->sa.agi_bp);
+}
+
+/* Cross-reference with the other btrees. */
+STATIC void
+xfs_scrub_agi_xref(
+	struct xfs_scrub_context	*sc)
+{
+	struct xfs_owner_info		oinfo;
+	struct xfs_mount		*mp = sc->mp;
+	xfs_agblock_t			agbno;
+	int				error;
+
+	if (sc->sm->sm_flags & XFS_SCRUB_OFLAG_CORRUPT)
+		return;
+
+	agbno = XFS_AGI_BLOCK(mp);
+
+	error = xfs_scrub_ag_btcur_init(sc, &sc->sa);
+	if (error)
+		return;
+
+	xfs_scrub_xref_is_used_space(sc, agbno, 1);
+	xfs_scrub_xref_is_not_inode_chunk(sc, agbno, 1);
+	xfs_scrub_agi_xref_icounts(sc);
+	xfs_rmap_ag_owner(&oinfo, XFS_RMAP_OWN_FS);
+	xfs_scrub_xref_is_owned_by(sc, agbno, 1, &oinfo);
+	xfs_scrub_xref_is_not_shared(sc, agbno, 1);
+
+	/* scrub teardown will take care of sc->sa for us */
+}
+
 /* Scrub the AGI. */
 int
 xfs_scrub_agi(
@@ -598,6 +838,7 @@ xfs_scrub_agi(
 			&sc->sa.agf_bp, &sc->sa.agfl_bp);
 	if (!xfs_scrub_process_error(sc, agno, XFS_AGI_BLOCK(sc->mp), &error))
 		goto out;
+	xfs_scrub_buffer_recheck(sc, sc->sa.agi_bp);
 
 	agi = XFS_BUF_TO_AGI(sc->sa.agi_bp);
 
@@ -626,7 +867,7 @@ xfs_scrub_agi(
 	}
 
 	/* Check inode counters */
-	xfs_ialloc_agino_range(mp, agno, &first_agino, &last_agino);
+	xfs_agino_range(mp, agno, &first_agino, &last_agino);
 	icount = be32_to_cpu(agi->agi_count);
 	if (icount > last_agino - first_agino + 1 ||
 	    icount < be32_to_cpu(agi->agi_freecount))
@@ -653,6 +894,7 @@ xfs_scrub_agi(
 	if (agi->agi_pad32 != cpu_to_be32(0))
 		xfs_scrub_block_set_corrupt(sc, sc->sa.agi_bp);
 
+	xfs_scrub_agi_xref(sc);
 out:
 	return error;
 }

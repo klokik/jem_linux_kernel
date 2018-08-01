@@ -382,7 +382,7 @@ static void gnttab_handle_deferred(struct timer_list *unused)
 			if (entry->page) {
 				pr_debug("freeing g.e. %#x (pfn %#lx)\n",
 					 entry->ref, page_to_pfn(entry->page));
-				__free_page(entry->page);
+				put_page(entry->page);
 			} else
 				pr_info("freeing g.e. %#x\n", entry->ref);
 			kfree(entry);
@@ -438,7 +438,7 @@ void gnttab_end_foreign_access(grant_ref_t ref, int readonly,
 	if (gnttab_end_foreign_access_ref(ref, readonly)) {
 		put_free_entry(ref);
 		if (page != 0)
-			free_page(page);
+			put_page(virt_to_page(page));
 	} else
 		gnttab_add_deferred(ref, readonly,
 				    page ? virt_to_page(page) : NULL);
@@ -799,7 +799,7 @@ int gnttab_alloc_pages(int nr_pages, struct page **pages)
 
 	return 0;
 }
-EXPORT_SYMBOL(gnttab_alloc_pages);
+EXPORT_SYMBOL_GPL(gnttab_alloc_pages);
 
 /**
  * gnttab_free_pages - free pages allocated by gnttab_alloc_pages()
@@ -820,7 +820,7 @@ void gnttab_free_pages(int nr_pages, struct page **pages)
 	}
 	free_xenballooned_pages(nr_pages, pages);
 }
-EXPORT_SYMBOL(gnttab_free_pages);
+EXPORT_SYMBOL_GPL(gnttab_free_pages);
 
 /* Handling of paged out grant targets (GNTST_eagain) */
 #define MAX_DELAY 256
@@ -1137,7 +1137,7 @@ static int gnttab_map(unsigned int start_idx, unsigned int end_idx)
 	/* No need for kzalloc as it is initialized in following hypercall
 	 * GNTTABOP_setup_table.
 	 */
-	frames = kmalloc(nr_gframes * sizeof(unsigned long), GFP_ATOMIC);
+	frames = kmalloc_array(nr_gframes, sizeof(unsigned long), GFP_ATOMIC);
 	if (!frames)
 		return -ENOMEM;
 
@@ -1300,8 +1300,9 @@ int gnttab_init(void)
 	max_nr_glist_frames = (max_nr_grant_frames *
 			       gnttab_interface->grefs_per_grant_frame / RPP);
 
-	gnttab_list = kmalloc(max_nr_glist_frames * sizeof(grant_ref_t *),
-			      GFP_KERNEL);
+	gnttab_list = kmalloc_array(max_nr_glist_frames,
+				    sizeof(grant_ref_t *),
+				    GFP_KERNEL);
 	if (gnttab_list == NULL)
 		return -ENOMEM;
 

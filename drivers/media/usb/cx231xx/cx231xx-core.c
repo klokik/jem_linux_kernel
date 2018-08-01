@@ -56,7 +56,7 @@ MODULE_PARM_DESC(alt, "alternate setting to use for video endpoint");
 			 dev->name, __func__ , ##arg); } while (0)
 
 /*****************************************************************
-*             Device control list functions     				 *
+*             Device control list functions					 *
 ******************************************************************/
 
 LIST_HEAD(cx231xx_devlist);
@@ -1034,7 +1034,7 @@ int cx231xx_init_isoc(struct cx231xx *dev, int max_packets,
 		dma_q->partial_buf[i] = 0;
 
 	dev->video_mode.isoc_ctl.urb =
-	    kzalloc(sizeof(void *) * num_bufs, GFP_KERNEL);
+	    kcalloc(num_bufs, sizeof(void *), GFP_KERNEL);
 	if (!dev->video_mode.isoc_ctl.urb) {
 		dev_err(dev->dev,
 			"cannot alloc memory for usb buffers\n");
@@ -1042,7 +1042,7 @@ int cx231xx_init_isoc(struct cx231xx *dev, int max_packets,
 	}
 
 	dev->video_mode.isoc_ctl.transfer_buffer =
-	    kzalloc(sizeof(void *) * num_bufs, GFP_KERNEL);
+	    kcalloc(num_bufs, sizeof(void *), GFP_KERNEL);
 	if (!dev->video_mode.isoc_ctl.transfer_buffer) {
 		dev_err(dev->dev,
 			"cannot allocate memory for usbtransfer\n");
@@ -1169,7 +1169,7 @@ int cx231xx_init_bulk(struct cx231xx *dev, int max_packets,
 		dma_q->partial_buf[i] = 0;
 
 	dev->video_mode.bulk_ctl.urb =
-	    kzalloc(sizeof(void *) * num_bufs, GFP_KERNEL);
+	    kcalloc(num_bufs, sizeof(void *), GFP_KERNEL);
 	if (!dev->video_mode.bulk_ctl.urb) {
 		dev_err(dev->dev,
 			"cannot alloc memory for usb buffers\n");
@@ -1177,7 +1177,7 @@ int cx231xx_init_bulk(struct cx231xx *dev, int max_packets,
 	}
 
 	dev->video_mode.bulk_ctl.transfer_buffer =
-	    kzalloc(sizeof(void *) * num_bufs, GFP_KERNEL);
+	    kcalloc(num_bufs, sizeof(void *), GFP_KERNEL);
 	if (!dev->video_mode.bulk_ctl.transfer_buffer) {
 		dev_err(dev->dev,
 			"cannot allocate memory for usbtransfer\n");

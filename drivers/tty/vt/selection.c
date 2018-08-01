@@ -186,11 +186,7 @@ int set_selection(const struct tiocl_selection __user *sel, struct tty_struct *t
 	}
 
 	if (ps > pe)	/* make sel_start <= sel_end */
-	{
-		int tmp = ps;
-		ps = pe;
-		pe = tmp;
-	}
+		swap(ps, pe);
 
 	if (sel_cons != vc_cons[fg_console].d) {
 		clear_selection();
@@ -284,7 +280,8 @@ int set_selection(const struct tiocl_selection __user *sel, struct tty_struct *t
 
 	/* Allocate a new buffer before freeing the old one ... */
 	multiplier = use_unicode ? 3 : 1;  /* chars can take up to 3 bytes */
-	bp = kmalloc(((sel_end-sel_start)/2+1)*multiplier, GFP_KERNEL);
+	bp = kmalloc_array((sel_end - sel_start) / 2 + 1, multiplier,
+			   GFP_KERNEL);
 	if (!bp) {
 		printk(KERN_WARNING "selection: kmalloc() failed\n");
 		clear_selection();

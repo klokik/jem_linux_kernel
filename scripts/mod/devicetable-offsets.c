@@ -139,6 +139,9 @@ int main(void)
 	DEVID(hv_vmbus_device_id);
 	DEVID_FIELD(hv_vmbus_device_id, guid);
 
+	DEVID(rpmsg_device_id);
+	DEVID_FIELD(rpmsg_device_id, name);
+
 	DEVID(i2c_device_id);
 	DEVID_FIELD(i2c_device_id, name);
 
@@ -202,6 +205,10 @@ int main(void)
 	DEVID_FIELD(hda_device_id, vendor_id);
 	DEVID_FIELD(hda_device_id, rev_id);
 	DEVID_FIELD(hda_device_id, api_version);
+
+	DEVID(sdw_device_id);
+	DEVID_FIELD(sdw_device_id, mfg_id);
+	DEVID_FIELD(sdw_device_id, part_id);
 
 	DEVID(fsl_mc_device_id);
 	DEVID_FIELD(fsl_mc_device_id, vendor);

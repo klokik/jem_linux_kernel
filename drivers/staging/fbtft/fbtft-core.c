@@ -1,19 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright (C) 2013 Noralf Tronnes
  *
  * This driver is inspired by:
  *   st7735fb.c, Copyright (C) 2011, Matt Porter
  *   broadsheetfb.c, Copyright (C) 2008, Jaya Kumar
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/module.h>
@@ -255,7 +246,7 @@ static int fbtft_request_gpios_dt(struct fbtft_par *par)
 static int fbtft_backlight_update_status(struct backlight_device *bd)
 {
 	struct fbtft_par *par = bl_get_data(bd);
-	bool polarity = !!(bd->props.state & BL_CORE_DRIVER1);
+	bool polarity = par->polarity;
 
 	fbtft_par_dbg(DEBUG_BACKLIGHT, par,
 		"%s: polarity=%d, power=%d, fb_blank=%d\n",
@@ -305,7 +296,7 @@ void fbtft_register_backlight(struct fbtft_par *par)
 	/* Assume backlight is off, get polarity from current state of pin */
 	bl_props.power = FB_BLANK_POWERDOWN;
 	if (!gpio_get_value(par->gpio.led[0]))
-		bl_props.state |= BL_CORE_DRIVER1;
+		par->polarity = true;
 
 	bd = backlight_device_register(dev_driver_string(par->info->device),
 				       par->info->device, par,
@@ -1367,20 +1358,18 @@ int fbtft_probe_common(struct fbtft_display *display,
 	}
 
 	/* write register functions */
-	if (display->regwidth == 8 && display->buswidth == 8) {
+	if (display->regwidth == 8 && display->buswidth == 8)
 		par->fbtftops.write_register = fbtft_write_reg8_bus8;
-	} else
-	if (display->regwidth == 8 && display->buswidth == 9 && par->spi) {
+	else if (display->regwidth == 8 && display->buswidth == 9 && par->spi)
 		par->fbtftops.write_register = fbtft_write_reg8_bus9;
-	} else if (display->regwidth == 16 && display->buswidth == 8) {
+	else if (display->regwidth == 16 && display->buswidth == 8)
 		par->fbtftops.write_register = fbtft_write_reg16_bus8;
-	} else if (display->regwidth == 16 && display->buswidth == 16) {
+	else if (display->regwidth == 16 && display->buswidth == 16)
 		par->fbtftops.write_register = fbtft_write_reg16_bus16;
-	} else {
+	else
 		dev_warn(dev,
-			"no default functions for regwidth=%d and buswidth=%d\n",
-			display->regwidth, display->buswidth);
-	}
+			 "no default functions for regwidth=%d and buswidth=%d\n",
+			 display->regwidth, display->buswidth);
 
 	/* write_vmem() functions */
 	if (display->buswidth == 8)

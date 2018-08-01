@@ -104,14 +104,6 @@ static void hci_uart_write_work(struct work_struct *work)
 
 /* ------- Interface to HCI layer ------ */
 
-/* Initialize device */
-static int hci_uart_open(struct hci_dev *hdev)
-{
-	BT_DBG("%s %p", hdev->name, hdev);
-
-	return 0;
-}
-
 /* Reset device */
 static int hci_uart_flush(struct hci_dev *hdev)
 {
@@ -128,6 +120,17 @@ static int hci_uart_flush(struct hci_dev *hdev)
 
 	if (test_bit(HCI_UART_PROTO_READY, &hu->flags))
 		hu->proto->flush(hu);
+
+	return 0;
+}
+
+/* Initialize device */
+static int hci_uart_open(struct hci_dev *hdev)
+{
+	BT_DBG("%s %p", hdev->name, hdev);
+
+	/* Undo clearing this from hci_uart_close() */
+	hdev->flush = hci_uart_flush;
 
 	return 0;
 }
@@ -207,9 +210,8 @@ static int hci_uart_setup(struct hci_dev *hdev)
 		return 0;
 	}
 
-	if (skb->len != sizeof(*ver)) {
+	if (skb->len != sizeof(*ver))
 		bt_dev_err(hdev, "Event length mismatch for version info");
-	}
 
 	kfree_skb(skb);
 	return 0;
@@ -286,9 +288,13 @@ int hci_uart_register_device(struct hci_uart *hu,
 
 	serdev_device_set_client_ops(hu->serdev, &hci_serdev_client_ops);
 
-	err = p->open(hu);
+	err = serdev_device_open(hu->serdev);
 	if (err)
 		return err;
+
+	err = p->open(hu);
+	if (err)
+		goto err_open;
 
 	hu->proto = p;
 	set_bit(HCI_UART_PROTO_READY, &hu->flags);
@@ -306,7 +312,9 @@ int hci_uart_register_device(struct hci_uart *hu,
 	hdev->bus = HCI_UART;
 	hci_set_drvdata(hdev, hu);
 
+	INIT_WORK(&hu->init_ready, hci_uart_init_work);
 	INIT_WORK(&hu->write_work, hci_uart_write_work);
+	percpu_init_rwsem(&hu->proto_lock);
 
 	/* Only when vendor specific setup callback is provided, consider
 	 * the manufacturer information valid. This avoids filling in the
@@ -356,6 +364,8 @@ err_register:
 err_alloc:
 	clear_bit(HCI_UART_PROTO_READY, &hu->flags);
 	p->close(hu);
+err_open:
+	serdev_device_close(hu->serdev);
 	return err;
 }
 EXPORT_SYMBOL_GPL(hci_uart_register_device);
@@ -370,5 +380,6 @@ void hci_uart_unregister_device(struct hci_uart *hu)
 	cancel_work_sync(&hu->write_work);
 
 	hu->proto->close(hu);
+	serdev_device_close(hu->serdev);
 }
 EXPORT_SYMBOL_GPL(hci_uart_unregister_device);

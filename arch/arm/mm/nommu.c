@@ -31,7 +31,7 @@ struct mpu_rgn_info mpu_rgn_info;
 
 #ifdef CONFIG_CPU_CP15
 #ifdef CONFIG_CPU_HIGH_VECTOR
-static unsigned long __init setup_vectors_base(void)
+unsigned long setup_vectors_base(void)
 {
 	unsigned long reg = get_cr();
 
@@ -57,7 +57,7 @@ static inline bool security_extensions_enabled(void)
 	return 0;
 }
 
-static unsigned long __init setup_vectors_base(void)
+unsigned long setup_vectors_base(void)
 {
 	unsigned long base = 0, reg = get_cr();
 
@@ -97,6 +97,38 @@ void __init arm_mm_memblock_reserve(void)
 	 * get very confused if 0 is returned as a legitimate address.
 	 */
 	memblock_reserve(0, 1);
+}
+
+static void __init adjust_lowmem_bounds_mpu(void)
+{
+	unsigned long pmsa = read_cpuid_ext(CPUID_EXT_MMFR0) & MMFR0_PMSA;
+
+	switch (pmsa) {
+	case MMFR0_PMSAv7:
+		pmsav7_adjust_lowmem_bounds();
+		break;
+	case MMFR0_PMSAv8:
+		pmsav8_adjust_lowmem_bounds();
+		break;
+	default:
+		break;
+	}
+}
+
+static void __init mpu_setup(void)
+{
+	unsigned long pmsa = read_cpuid_ext(CPUID_EXT_MMFR0) & MMFR0_PMSA;
+
+	switch (pmsa) {
+	case MMFR0_PMSAv7:
+		pmsav7_setup();
+		break;
+	case MMFR0_PMSAv8:
+		pmsav8_setup();
+		break;
+	default:
+		break;
+	}
 }
 
 void __init adjust_lowmem_bounds(void)

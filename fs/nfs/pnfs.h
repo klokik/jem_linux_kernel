@@ -35,11 +35,14 @@
 #include <linux/nfs_page.h>
 #include <linux/workqueue.h>
 
+struct nfs4_opendata;
+
 enum {
 	NFS_LSEG_VALID = 0,	/* cleared when lseg is recalled/returned */
 	NFS_LSEG_ROC,		/* roc bit received from server */
 	NFS_LSEG_LAYOUTCOMMIT,	/* layoutcommit bit set for layoutcommit */
 	NFS_LSEG_LAYOUTRETURN,	/* layoutreturn bit set for layoutreturn */
+	NFS_LSEG_UNAVAILABLE,	/* unavailable bit set for temporary problem */
 };
 
 /* Individual ip address */
@@ -86,6 +89,7 @@ enum pnfs_try_status {
  */
 #define NFS4_DEF_DS_TIMEO   600 /* in tenths of a second */
 #define NFS4_DEF_DS_RETRANS 5
+#define PNFS_DEVICE_RETRY_TIMEOUT (120*HZ)
 
 /* error codes for internal use */
 #define NFS4ERR_RESET_TO_MDS   12001
@@ -108,6 +112,7 @@ enum layoutdriver_policy_flags {
 	PNFS_LAYOUTRET_ON_SETATTR	= 1 << 0,
 	PNFS_LAYOUTRET_ON_ERROR		= 1 << 1,
 	PNFS_READ_WHOLE_PAGE		= 1 << 2,
+	PNFS_LAYOUTGET_ON_OPEN		= 1 << 3,
 };
 
 struct nfs4_deviceid_node;
@@ -221,10 +226,11 @@ extern int pnfs_register_layoutdriver(struct pnfs_layoutdriver_type *);
 extern void pnfs_unregister_layoutdriver(struct pnfs_layoutdriver_type *);
 
 /* nfs4proc.c */
+extern size_t max_response_pages(struct nfs_server *server);
 extern int nfs4_proc_getdeviceinfo(struct nfs_server *server,
 				   struct pnfs_device *dev,
 				   struct rpc_cred *cred);
-extern struct pnfs_layout_segment* nfs4_proc_layoutget(struct nfs4_layoutget *lgp, long *timeout, gfp_t gfp_flags);
+extern struct pnfs_layout_segment* nfs4_proc_layoutget(struct nfs4_layoutget *lgp, long *timeout);
 extern int nfs4_proc_layoutreturn(struct nfs4_layoutreturn *lrp, bool sync);
 
 /* pnfs.c */
@@ -244,6 +250,7 @@ size_t pnfs_generic_pg_test(struct nfs_pageio_descriptor *pgio,
 			    struct nfs_page *prev, struct nfs_page *req);
 void pnfs_set_lo_fail(struct pnfs_layout_segment *lseg);
 struct pnfs_layout_segment *pnfs_layout_process(struct nfs4_layoutget *lgp);
+void pnfs_layoutget_free(struct nfs4_layoutget *lgp);
 void pnfs_free_lseg_list(struct list_head *tmp_list);
 void pnfs_destroy_layout(struct nfs_inode *);
 void pnfs_destroy_all_layouts(struct nfs_client *);
@@ -373,6 +380,11 @@ void pnfs_layout_mark_request_commit(struct nfs_page *req,
 				     struct pnfs_layout_segment *lseg,
 				     struct nfs_commit_info *cinfo,
 				     u32 ds_commit_idx);
+void pnfs_lgopen_prepare(struct nfs4_opendata *data,
+			 struct nfs_open_context *ctx);
+void pnfs_parse_lgopen(struct inode *ino, struct nfs4_layoutget *lgp,
+		       struct nfs_open_context *ctx);
+void nfs4_lgopen_release(struct nfs4_layoutget *lgp);
 
 static inline bool nfs_have_layout(struct inode *inode)
 {
@@ -524,8 +536,10 @@ static inline int pnfs_return_layout(struct inode *ino)
 	struct nfs_inode *nfsi = NFS_I(ino);
 	struct nfs_server *nfss = NFS_SERVER(ino);
 
-	if (pnfs_enabled_sb(nfss) && nfsi->layout)
+	if (pnfs_enabled_sb(nfss) && nfsi->layout) {
+		set_bit(NFS_LAYOUT_RETURN_REQUESTED, &nfsi->layout->plh_flags);
 		return _pnfs_return_layout(ino);
+	}
 
 	return 0;
 }
@@ -771,6 +785,27 @@ static inline bool nfs4_refresh_layout_stateid(nfs4_stateid *dst,
 {
 	return false;
 }
+
+static inline void pnfs_lgopen_prepare(struct nfs4_opendata *data,
+		struct nfs_open_context *ctx)
+{
+}
+
+static inline void pnfs_parse_lgopen(struct inode *ino,
+		struct nfs4_layoutget *lgp,
+		struct nfs_open_context *ctx)
+{
+}
+
+static inline void nfs4_lgopen_release(struct nfs4_layoutget *lgp)
+{
+}
+
+static inline bool pnfs_layout_is_valid(const struct pnfs_layout_hdr *lo)
+{
+	return false;
+}
+
 #endif /* CONFIG_NFS_V4_1 */
 
 #if IS_ENABLED(CONFIG_NFS_V4_2)

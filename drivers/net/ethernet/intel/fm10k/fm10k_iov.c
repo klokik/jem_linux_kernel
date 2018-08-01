@@ -1,22 +1,5 @@
-/* Intel(R) Ethernet Switch Host Interface Driver
- * Copyright(c) 2013 - 2017 Intel Corporation.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * The full GNU General Public License is included in this distribution in
- * the file called "COPYING".
- *
- * Contact Information:
- * e1000-devel Mailing List <e1000-devel@lists.sourceforge.net>
- * Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
- */
+// SPDX-License-Identifier: GPL-2.0
+/* Copyright(c) 2013 - 2018 Intel Corporation. */
 
 #include "fm10k.h"
 #include "fm10k_vf.h"
@@ -353,7 +336,7 @@ int fm10k_iov_resume(struct pci_dev *pdev)
 		struct fm10k_vf_info *vf_info = &iov_data->vf_info[i];
 
 		/* allocate all but the last GLORT to the VFs */
-		if (i == ((~hw->mac.dglort_map) >> FM10K_DGLORTMAP_MASK_SHIFT))
+		if (i == (~hw->mac.dglort_map >> FM10K_DGLORTMAP_MASK_SHIFT))
 			break;
 
 		/* assign GLORT to VF, and restrict it to multicast */
@@ -511,7 +494,7 @@ int fm10k_iov_configure(struct pci_dev *pdev, int num_vfs)
 		return err;
 
 	/* allocate VFs if not already allocated */
-	if (num_vfs && (num_vfs != current_vfs)) {
+	if (num_vfs && num_vfs != current_vfs) {
 		/* Disable completer abort error reporting as
 		 * the VFs can trigger this any time they read a queue
 		 * that they don't own.

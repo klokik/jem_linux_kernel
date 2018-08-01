@@ -198,23 +198,16 @@ befs_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags)
 
 	if (ret == BEFS_BT_NOT_FOUND) {
 		befs_debug(sb, "<--- %s %pd not found", __func__, dentry);
-		d_add(dentry, NULL);
-		return ERR_PTR(-ENOENT);
-
+		inode = NULL;
 	} else if (ret != BEFS_OK || offset == 0) {
 		befs_error(sb, "<--- %s Error", __func__);
-		return ERR_PTR(-ENODATA);
+		inode = ERR_PTR(-ENODATA);
+	} else {
+		inode = befs_iget(dir->i_sb, (ino_t) offset);
 	}
-
-	inode = befs_iget(dir->i_sb, (ino_t) offset);
-	if (IS_ERR(inode))
-		return ERR_CAST(inode);
-
-	d_add(dentry, inode);
-
 	befs_debug(sb, "<--- %s", __func__);
 
-	return NULL;
+	return d_splice_alias(inode, dentry);
 }
 
 static int
@@ -444,11 +437,15 @@ unacquire_none:
 static int __init
 befs_init_inodecache(void)
 {
-	befs_inode_cachep = kmem_cache_create("befs_inode_cache",
-					      sizeof (struct befs_inode_info),
-					      0, (SLAB_RECLAIM_ACCOUNT|
-						SLAB_MEM_SPREAD|SLAB_ACCOUNT),
-					      init_once);
+	befs_inode_cachep = kmem_cache_create_usercopy("befs_inode_cache",
+				sizeof(struct befs_inode_info), 0,
+				(SLAB_RECLAIM_ACCOUNT|SLAB_MEM_SPREAD|
+					SLAB_ACCOUNT),
+				offsetof(struct befs_inode_info,
+					i_data.symlink),
+				sizeof_field(struct befs_inode_info,
+					i_data.symlink),
+				init_once);
 	if (befs_inode_cachep == NULL)
 		return -ENOMEM;
 

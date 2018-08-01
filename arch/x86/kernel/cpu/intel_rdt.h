@@ -7,11 +7,14 @@
 #include <linux/jump_label.h>
 
 #define IA32_L3_QOS_CFG		0xc81
+#define IA32_L2_QOS_CFG		0xc82
 #define IA32_L3_CBM_BASE	0xc90
 #define IA32_L2_CBM_BASE	0xd10
 #define IA32_MBA_THRTL_BASE	0xd50
 
 #define L3_QOS_CDP_ENABLE	0x01ULL
+
+#define L2_QOS_CDP_ENABLE	0x01ULL
 
 /*
  * Event IDs are used to program IA32_QM_EVTSEL before reading event
@@ -25,6 +28,7 @@
 
 #define MBM_CNTR_WIDTH			24
 #define MBM_OVERFLOW_INTERVAL		1000
+#define MAX_MBA_BW			100u
 
 #define RMID_VAL_ERROR			BIT_ULL(63)
 #define RMID_VAL_UNAVAIL		BIT_ULL(62)
@@ -177,10 +181,20 @@ struct rftype {
  * struct mbm_state - status for each MBM counter in each domain
  * @chunks:	Total data moved (multiply by rdt_group.mon_scale to get bytes)
  * @prev_msr	Value of IA32_QM_CTR for this RMID last time we read it
+ * @chunks_bw	Total local data moved. Used for bandwidth calculation
+ * @prev_bw_msr:Value of previous IA32_QM_CTR for bandwidth counting
+ * @prev_bw	The most recent bandwidth in MBps
+ * @delta_bw	Difference between the current and previous bandwidth
+ * @delta_comp	Indicates whether to compute the delta_bw
  */
 struct mbm_state {
 	u64	chunks;
 	u64	prev_msr;
+	u64	chunks_bw;
+	u64	prev_bw_msr;
+	u32	prev_bw;
+	u32	delta_bw;
+	bool	delta_comp;
 };
 
 /**
@@ -199,6 +213,7 @@ struct mbm_state {
  * @cqm_work_cpu:
  *		worker cpu for CQM h/w counters
  * @ctrl_val:	array of cache or mem ctrl values (indexed by CLOSID)
+ * @mbps_val:	When mba_sc is enabled, this holds the bandwidth in MBps
  * @new_ctrl:	new ctrl value to be loaded
  * @have_new_ctrl: did user provide new_ctrl for this domain
  */
@@ -214,6 +229,7 @@ struct rdt_domain {
 	int			mbm_work_cpu;
 	int			cqm_work_cpu;
 	u32			*ctrl_val;
+	u32			*mbps_val;
 	u32			new_ctrl;
 	bool			have_new_ctrl;
 };
@@ -256,6 +272,7 @@ struct rdt_cache {
  * @min_bw:		Minimum memory bandwidth percentage user can request
  * @bw_gran:		Granularity at which the memory bandwidth is allocated
  * @delay_linear:	True if memory B/W delay is in linear scale
+ * @mba_sc:		True if MBA software controller(mba_sc) is enabled
  * @mb_map:		Mapping of memory B/W percentage to memory B/W delay
  */
 struct rdt_membw {
@@ -263,6 +280,7 @@ struct rdt_membw {
 	u32		min_bw;
 	u32		bw_gran;
 	u32		delay_linear;
+	bool		mba_sc;
 	u32		*mb_map;
 };
 
@@ -357,6 +375,8 @@ enum {
 	RDT_RESOURCE_L3DATA,
 	RDT_RESOURCE_L3CODE,
 	RDT_RESOURCE_L2,
+	RDT_RESOURCE_L2DATA,
+	RDT_RESOURCE_L2CODE,
 	RDT_RESOURCE_MBA,
 
 	/* Must be the last */
@@ -440,6 +460,9 @@ void mon_event_read(struct rmid_read *rr, struct rdt_domain *d,
 void mbm_setup_overflow_handler(struct rdt_domain *dom,
 				unsigned long delay_ms);
 void mbm_handle_overflow(struct work_struct *work);
+bool is_mba_sc(struct rdt_resource *r);
+void setup_default_ctrlval(struct rdt_resource *r, u32 *dc, u32 *dm);
+u32 delay_bw_map(unsigned long bw, struct rdt_resource *r);
 void cqm_setup_limbo_handler(struct rdt_domain *dom, unsigned long delay_ms);
 void cqm_handle_limbo(struct work_struct *work);
 bool has_busy_rmid(struct rdt_resource *r, struct rdt_domain *d);

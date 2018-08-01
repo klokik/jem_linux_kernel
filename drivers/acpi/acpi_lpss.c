@@ -22,6 +22,7 @@
 #include <linux/pm_domain.h>
 #include <linux/pm_runtime.h>
 #include <linux/pwm.h>
+#include <linux/suspend.h>
 #include <linux/delay.h>
 
 #include "internal.h"
@@ -68,6 +69,10 @@ ACPI_MODULE_NAME("acpi_lpss");
 #define LPSS_LTR			BIT(3)
 #define LPSS_SAVE_CTX			BIT(4)
 #define LPSS_NO_D3_DELAY		BIT(5)
+
+/* Crystal Cove PMIC shares same ACPI ID between different platforms */
+#define BYT_CRC_HRV			2
+#define CHT_CRC_HRV			3
 
 struct lpss_private_data;
 
@@ -162,7 +167,7 @@ static void byt_pwm_setup(struct lpss_private_data *pdata)
 	if (!adev->pnp.unique_id || strcmp(adev->pnp.unique_id, "1"))
 		return;
 
-	if (!acpi_dev_present("INT33FD", NULL, -1))
+	if (!acpi_dev_present("INT33FD", NULL, BYT_CRC_HRV))
 		pwm_add_table(byt_pwm_lookup, ARRAY_SIZE(byt_pwm_lookup));
 }
 
@@ -229,11 +234,13 @@ static const struct lpss_device_desc lpt_sdio_dev_desc = {
 
 static const struct lpss_device_desc byt_pwm_dev_desc = {
 	.flags = LPSS_SAVE_CTX,
+	.prv_offset = 0x800,
 	.setup = byt_pwm_setup,
 };
 
 static const struct lpss_device_desc bsw_pwm_dev_desc = {
 	.flags = LPSS_SAVE_CTX | LPSS_NO_D3_DELAY,
+	.prv_offset = 0x800,
 	.setup = bsw_pwm_setup,
 };
 
@@ -427,6 +434,142 @@ out:
 	return 0;
 }
 
+struct lpss_device_links {
+	const char *supplier_hid;
+	const char *supplier_uid;
+	const char *consumer_hid;
+	const char *consumer_uid;
+	u32 flags;
+};
+
+/*
+ * The _DEP method is used to identify dependencies but instead of creating
+ * device links for every handle in _DEP, only links in the following list are
+ * created. That is necessary because, in the general case, _DEP can refer to
+ * devices that might not have drivers, or that are on different buses, or where
+ * the supplier is not enumerated until after the consumer is probed.
+ */
+static const struct lpss_device_links lpss_device_links[] = {
+	{"808622C1", "7", "80860F14", "3", DL_FLAG_PM_RUNTIME},
+};
+
+static bool hid_uid_match(const char *hid1, const char *uid1,
+			  const char *hid2, const char *uid2)
+{
+	return !strcmp(hid1, hid2) && uid1 && uid2 && !strcmp(uid1, uid2);
+}
+
+static bool acpi_lpss_is_supplier(struct acpi_device *adev,
+				  const struct lpss_device_links *link)
+{
+	return hid_uid_match(acpi_device_hid(adev), acpi_device_uid(adev),
+			     link->supplier_hid, link->supplier_uid);
+}
+
+static bool acpi_lpss_is_consumer(struct acpi_device *adev,
+				  const struct lpss_device_links *link)
+{
+	return hid_uid_match(acpi_device_hid(adev), acpi_device_uid(adev),
+			     link->consumer_hid, link->consumer_uid);
+}
+
+struct hid_uid {
+	const char *hid;
+	const char *uid;
+};
+
+static int match_hid_uid(struct device *dev, void *data)
+{
+	struct acpi_device *adev = ACPI_COMPANION(dev);
+	struct hid_uid *id = data;
+
+	if (!adev)
+		return 0;
+
+	return hid_uid_match(acpi_device_hid(adev), acpi_device_uid(adev),
+			     id->hid, id->uid);
+}
+
+static struct device *acpi_lpss_find_device(const char *hid, const char *uid)
+{
+	struct hid_uid data = {
+		.hid = hid,
+		.uid = uid,
+	};
+
+	return bus_find_device(&platform_bus_type, NULL, &data, match_hid_uid);
+}
+
+static bool acpi_lpss_dep(struct acpi_device *adev, acpi_handle handle)
+{
+	struct acpi_handle_list dep_devices;
+	acpi_status status;
+	int i;
+
+	if (!acpi_has_method(adev->handle, "_DEP"))
+		return false;
+
+	status = acpi_evaluate_reference(adev->handle, "_DEP", NULL,
+					 &dep_devices);
+	if (ACPI_FAILURE(status)) {
+		dev_dbg(&adev->dev, "Failed to evaluate _DEP.\n");
+		return false;
+	}
+
+	for (i = 0; i < dep_devices.count; i++) {
+		if (dep_devices.handles[i] == handle)
+			return true;
+	}
+
+	return false;
+}
+
+static void acpi_lpss_link_consumer(struct device *dev1,
+				    const struct lpss_device_links *link)
+{
+	struct device *dev2;
+
+	dev2 = acpi_lpss_find_device(link->consumer_hid, link->consumer_uid);
+	if (!dev2)
+		return;
+
+	if (acpi_lpss_dep(ACPI_COMPANION(dev2), ACPI_HANDLE(dev1)))
+		device_link_add(dev2, dev1, link->flags);
+
+	put_device(dev2);
+}
+
+static void acpi_lpss_link_supplier(struct device *dev1,
+				    const struct lpss_device_links *link)
+{
+	struct device *dev2;
+
+	dev2 = acpi_lpss_find_device(link->supplier_hid, link->supplier_uid);
+	if (!dev2)
+		return;
+
+	if (acpi_lpss_dep(ACPI_COMPANION(dev1), ACPI_HANDLE(dev2)))
+		device_link_add(dev1, dev2, link->flags);
+
+	put_device(dev2);
+}
+
+static void acpi_lpss_create_device_links(struct acpi_device *adev,
+					  struct platform_device *pdev)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(lpss_device_links); i++) {
+		const struct lpss_device_links *link = &lpss_device_links[i];
+
+		if (acpi_lpss_is_supplier(adev, link))
+			acpi_lpss_link_consumer(&pdev->dev, link);
+
+		if (acpi_lpss_is_consumer(adev, link))
+			acpi_lpss_link_supplier(&pdev->dev, link);
+	}
+}
+
 static int acpi_lpss_create_device(struct acpi_device *adev,
 				   const struct acpi_device_id *id)
 {
@@ -465,6 +608,8 @@ static int acpi_lpss_create_device(struct acpi_device *adev,
 	acpi_dev_free_resource_list(&resource_list);
 
 	if (!pdata->mmio_base) {
+		/* Avoid acpi_bus_attach() instantiating a pdev for this dev. */
+		adev->pnp.type.platform_id = 0;
 		/* Skip the device, but continue the namespace scan. */
 		ret = 0;
 		goto err_out;
@@ -500,6 +645,7 @@ static int acpi_lpss_create_device(struct acpi_device *adev,
 	adev->driver_data = pdata;
 	pdev = acpi_create_platform_device(adev, dev_desc->properties);
 	if (!IS_ERR_OR_NULL(pdev)) {
+		acpi_lpss_create_device_links(adev, pdev);
 		return 1;
 	}
 
@@ -801,9 +947,10 @@ static void lpss_iosf_exit_d3_state(void)
 	mutex_unlock(&lpss_iosf_mutex);
 }
 
-static int acpi_lpss_suspend(struct device *dev, bool wakeup)
+static int acpi_lpss_suspend(struct device *dev, bool runtime)
 {
 	struct lpss_private_data *pdata = acpi_driver_data(ACPI_COMPANION(dev));
+	bool wakeup = runtime || device_may_wakeup(dev);
 	int ret;
 
 	if (pdata->dev_desc->flags & LPSS_SAVE_CTX)
@@ -816,13 +963,14 @@ static int acpi_lpss_suspend(struct device *dev, bool wakeup)
 	 * wrong status for devices being about to be powered off. See
 	 * lpss_iosf_enter_d3_state() for further information.
 	 */
-	if (lpss_quirks & LPSS_QUIRK_ALWAYS_POWER_ON && iosf_mbi_available())
+	if ((runtime || !pm_suspend_via_firmware()) &&
+	    lpss_quirks & LPSS_QUIRK_ALWAYS_POWER_ON && iosf_mbi_available())
 		lpss_iosf_enter_d3_state();
 
 	return ret;
 }
 
-static int acpi_lpss_resume(struct device *dev)
+static int acpi_lpss_resume(struct device *dev, bool runtime)
 {
 	struct lpss_private_data *pdata = acpi_driver_data(ACPI_COMPANION(dev));
 	int ret;
@@ -831,7 +979,8 @@ static int acpi_lpss_resume(struct device *dev)
 	 * This call is kept first to be in symmetry with
 	 * acpi_lpss_runtime_suspend() one.
 	 */
-	if (lpss_quirks & LPSS_QUIRK_ALWAYS_POWER_ON && iosf_mbi_available())
+	if ((runtime || !pm_resume_via_firmware()) &&
+	    lpss_quirks & LPSS_QUIRK_ALWAYS_POWER_ON && iosf_mbi_available())
 		lpss_iosf_exit_d3_state();
 
 	ret = acpi_dev_resume(dev);
@@ -855,12 +1004,12 @@ static int acpi_lpss_suspend_late(struct device *dev)
 		return 0;
 
 	ret = pm_generic_suspend_late(dev);
-	return ret ? ret : acpi_lpss_suspend(dev, device_may_wakeup(dev));
+	return ret ? ret : acpi_lpss_suspend(dev, false);
 }
 
 static int acpi_lpss_resume_early(struct device *dev)
 {
-	int ret = acpi_lpss_resume(dev);
+	int ret = acpi_lpss_resume(dev, false);
 
 	return ret ? ret : pm_generic_resume_early(dev);
 }
@@ -875,7 +1024,7 @@ static int acpi_lpss_runtime_suspend(struct device *dev)
 
 static int acpi_lpss_runtime_resume(struct device *dev)
 {
-	int ret = acpi_lpss_resume(dev);
+	int ret = acpi_lpss_resume(dev, true);
 
 	return ret ? ret : pm_generic_runtime_resume(dev);
 }

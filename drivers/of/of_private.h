@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 #ifndef _LINUX_OF_PRIVATE_H
 #define _LINUX_OF_PRIVATE_H
 /*
@@ -5,11 +6,6 @@
  *
  * Paul Mackerras	August 1996.
  * Copyright (C) 1996-2005 Paul Mackerras.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 
 /**
@@ -83,6 +79,8 @@ int of_resolve_phandles(struct device_node *tree);
 #if defined(CONFIG_OF_OVERLAY)
 void of_overlay_mutex_lock(void);
 void of_overlay_mutex_unlock(void);
+int of_free_phandle_cache(void);
+void of_populate_phandle_cache(void);
 #else
 static inline void of_overlay_mutex_lock(void) {};
 static inline void of_overlay_mutex_unlock(void) {};
@@ -108,7 +106,8 @@ extern void *__unflatten_device_tree(const void *blob,
  * own the devtree lock or work on detached trees only.
  */
 struct property *__of_prop_dup(const struct property *prop, gfp_t allocflags);
-__printf(2, 3) struct device_node *__of_node_dup(const struct device_node *np, const char *fmt, ...);
+struct device_node *__of_node_dup(const struct device_node *np,
+				  const char *full_name);
 
 struct device_node *__of_find_node_by_path(struct device_node *parent,
 						const char *path);
@@ -134,6 +133,9 @@ extern void __of_detach_node_sysfs(struct device_node *np);
 
 extern void __of_sysfs_remove_bin_file(struct device_node *np,
 				       struct property *prop);
+
+/* illegal phandle value (set when unresolved) */
+#define OF_PHANDLE_ILLEGAL	0xdeadbeef
 
 /* iterators for transactions, used for overlays */
 /* forward iterator */

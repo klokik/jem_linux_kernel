@@ -176,7 +176,7 @@ static int rockchip_sound_da7219_hw_params(struct snd_pcm_substream *substream,
 
 static int rockchip_sound_da7219_init(struct snd_soc_pcm_runtime *rtd)
 {
-	struct snd_soc_codec *codec = rtd->codec_dais[0]->codec;
+	struct snd_soc_component *component = rtd->codec_dais[0]->component;
 	struct snd_soc_dai *codec_dai = rtd->codec_dai;
 	int ret;
 
@@ -206,7 +206,8 @@ static int rockchip_sound_da7219_init(struct snd_soc_pcm_runtime *rtd)
 		return ret;
 	}
 
-	snd_jack_set_key(rockchip_sound_jack.jack, SND_JACK_BTN_0, KEY_MEDIA);
+	snd_jack_set_key(
+		rockchip_sound_jack.jack, SND_JACK_BTN_0, KEY_PLAYPAUSE);
 	snd_jack_set_key(
 		rockchip_sound_jack.jack, SND_JACK_BTN_1, KEY_VOLUMEUP);
 	snd_jack_set_key(
@@ -214,46 +215,7 @@ static int rockchip_sound_da7219_init(struct snd_soc_pcm_runtime *rtd)
 	snd_jack_set_key(
 		rockchip_sound_jack.jack, SND_JACK_BTN_3, KEY_VOICECOMMAND);
 
-	da7219_aad_jack_det(codec, &rockchip_sound_jack);
-
-	return 0;
-}
-
-static int rockchip_sound_cdndp_hw_params(struct snd_pcm_substream *substream,
-					  struct snd_pcm_hw_params *params)
-{
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
-	struct snd_soc_dai *codec_dai = rtd->codec_dai;
-	int mclk, ret;
-
-	/* in bypass mode, the mclk has to be one of the frequencies below */
-	switch (params_rate(params)) {
-	case 8000:
-	case 16000:
-	case 24000:
-	case 32000:
-	case 48000:
-	case 64000:
-	case 96000:
-		mclk = 12288000;
-		break;
-	case 11025:
-	case 22050:
-	case 44100:
-	case 88200:
-		mclk = 11289600;
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	ret = snd_soc_dai_set_sysclk(cpu_dai, 0, mclk,
-				     SND_SOC_CLOCK_OUT);
-	if (ret < 0) {
-		dev_err(codec_dai->dev, "Can't set cpu clock out %d\n", ret);
-		return ret;
-	}
+	da7219_aad_jack_det(component, &rockchip_sound_jack);
 
 	return 0;
 }
@@ -292,10 +254,6 @@ static const struct snd_soc_ops rockchip_sound_da7219_ops = {
 	.hw_params = rockchip_sound_da7219_hw_params,
 };
 
-static const struct snd_soc_ops rockchip_sound_cdndp_ops = {
-	.hw_params = rockchip_sound_cdndp_hw_params,
-};
-
 static const struct snd_soc_ops rockchip_sound_dmic_ops = {
 	.hw_params = rockchip_sound_dmic_hw_params,
 };
@@ -322,8 +280,7 @@ static const struct snd_soc_dai_link rockchip_dais[] = {
 	[DAILINK_CDNDP] = {
 		.name = "DP",
 		.stream_name = "DP PCM",
-		.codec_dai_name = "i2s-hifi",
-		.ops = &rockchip_sound_cdndp_ops,
+		.codec_dai_name = "spdif-hifi",
 		.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF |
 			SND_SOC_DAIFMT_CBS_CFS,
 	},
@@ -367,7 +324,8 @@ static const struct snd_soc_dai_link rockchip_dais[] = {
 	[DAILINK_RT5514_DSP] = {
 		.name = "RT5514 DSP",
 		.stream_name = "Wake on Voice",
-		.codec_dai_name = "rt5514-dsp-cpu-dai",
+		.codec_name = "snd-soc-dummy",
+		.codec_dai_name = "snd-soc-dummy-dai",
 	},
 };
 
@@ -504,7 +462,7 @@ static int rockchip_sound_of_parse_dais(struct device *dev,
 	num_routes = 0;
 	for (i = 0; i < ARRAY_SIZE(rockchip_routes); i++)
 		num_routes += rockchip_routes[i].num_routes;
-	routes = devm_kzalloc(dev, num_routes * sizeof(*routes),
+	routes = devm_kcalloc(dev, num_routes, sizeof(*routes),
 			      GFP_KERNEL);
 	if (!routes)
 		return -ENOMEM;
@@ -528,7 +486,18 @@ static int rockchip_sound_of_parse_dais(struct device *dev,
 		if (index < 0)
 			continue;
 
-		np_cpu = (index == DAILINK_CDNDP) ? np_cpu1 : np_cpu0;
+		switch (index) {
+		case DAILINK_CDNDP:
+			np_cpu = np_cpu1;
+			break;
+		case DAILINK_RT5514_DSP:
+			np_cpu = np_codec;
+			break;
+		default:
+			np_cpu = np_cpu0;
+			break;
+		}
+
 		if (!np_cpu) {
 			dev_err(dev, "Missing 'rockchip,cpu' for %s\n",
 				rockchip_dais[index].name);
@@ -538,7 +507,8 @@ static int rockchip_sound_of_parse_dais(struct device *dev,
 		dai = &card->dai_link[card->num_links++];
 		*dai = rockchip_dais[index];
 
-		dai->codec_of_node = np_codec;
+		if (!dai->codec_name)
+			dai->codec_of_node = np_codec;
 		dai->platform_of_node = np_cpu;
 		dai->cpu_of_node = np_cpu;
 
