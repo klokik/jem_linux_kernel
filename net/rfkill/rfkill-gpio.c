@@ -84,26 +84,12 @@ static int rfkill_gpio_acpi_probe(struct device *dev,
 	return devm_acpi_dev_add_driver_gpios(dev, acpi_rfkill_default_gpios);
 }
 
-static int rfkill_gpio_of_probe(struct device *dev,
-				struct rfkill_gpio_data *rfkill)
-{
-	const char *type_name;
-
-	device_property_read_string(dev, "rfkill-name", &rfkill->name);
-	device_property_read_string(dev, "rfkill-type", &type_name);
-
-	if (!rfkill->name)
-		rfkill->name = dev_name(dev);
-
-	rfkill->type = rfkill_find_type(type_name);
-
-	return 0;
-}
-
 static int rfkill_gpio_probe(struct platform_device *pdev)
 {
 	struct rfkill_gpio_data *rfkill;
 	struct gpio_desc *gpio;
+	const char *name_propety_string = "name";
+	const char *type_propety_string = "type";
 	const char *type_name;
 	int ret;
 
@@ -111,8 +97,14 @@ static int rfkill_gpio_probe(struct platform_device *pdev)
 	if (!rfkill)
 		return -ENOMEM;
 
-	device_property_read_string(&pdev->dev, "name", &rfkill->name);
-	device_property_read_string(&pdev->dev, "type", &type_name);
+	/* Device Tree has other purpose for property named 'name' */
+	if (&pdev->dev.of_node) {
+		name_propety_string = "rfkill-name";
+		type_propety_string = "rfkill-type";
+	}
+
+	device_property_read_string(&pdev->dev, name_propety_string, &rfkill->name);
+	device_property_read_string(&pdev->dev, type_propety_string, &type_name);
 
 	if (!rfkill->name)
 		rfkill->name = dev_name(&pdev->dev);
@@ -121,10 +113,6 @@ static int rfkill_gpio_probe(struct platform_device *pdev)
 
 	if (ACPI_HANDLE(&pdev->dev)) {
 		ret = rfkill_gpio_acpi_probe(&pdev->dev, rfkill);
-		if (ret)
-			return ret;
-	} else if (&pdev->dev.of_node) {
-		ret = rfkill_gpio_of_probe(&pdev->dev, rfkill);
 		if (ret)
 			return ret;
 	}
@@ -157,18 +145,13 @@ static int rfkill_gpio_probe(struct platform_device *pdev)
 
 	ret = rfkill_register(rfkill->rfkill_dev);
 	if (ret < 0)
-		goto err_destroy;
+		return ret;
 
 	platform_set_drvdata(pdev, rfkill);
 
 	dev_info(&pdev->dev, "%s device registered.\n", rfkill->name);
 
 	return 0;
-
-err_destroy:
-	rfkill_destroy(rfkill->rfkill_dev);
-
-	return ret;
 }
 
 static int rfkill_gpio_remove(struct platform_device *pdev)
