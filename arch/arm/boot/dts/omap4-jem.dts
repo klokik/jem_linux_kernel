@@ -71,9 +71,15 @@
 	};
 
 	rfkill_bt {
+		status = "okay";
 		compatible = "rfkill-gpio";
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&bt_pins>;
+
 		rfkill-name = "bcm2076";
 		rfkill-type = "bluetooth";
+
 		reset-gpios = <&gpio2 21 GPIO_ACTIVE_HIGH>; 	// reset_n
 		shutdown-gpios = <&gpio2 14 GPIO_ACTIVE_HIGH>; 	// reg_en
 	};
@@ -152,6 +158,7 @@
 		compatible = "ti,omap-dmtimer-pwm";
 		ti,timers = <&timer10>;
 		ti,prescaler = <0>; /* use ti,clock-source in newer kernels */
+		// ti,clock-source = <0x01>;
 		#pwm-cells = <3>;
 	};
 
@@ -243,7 +250,7 @@
 			/* &gpio_keys_pins */
 			&backlight_pins
 			&nt71391_pins
-			&bt_pins
+			// &bt_pins
 			/* &smb347_pins */
 			/* &wm8962_pins */
 	>;
