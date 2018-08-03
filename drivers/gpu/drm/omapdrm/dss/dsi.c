@@ -2816,8 +2816,10 @@ static int dsi_vc_send_null(struct dsi_data *dsi, int channel)
 	return dsi_vc_send_long(dsi, channel, MIPI_DSI_NULL_PACKET, NULL, 0, 0);
 }
 
-static int dsi_vc_send_turn_on_periph(struct dsi_data *dsi, int channel)
+static int dsi_vc_send_turn_on_periph(struct omap_dss_device *dssdev, int channel)
 {
+	struct dsi_data *dsi = to_dsi_data(dssdev);
+
 	return dsi_vc_send_short(dsi, channel, MIPI_DSI_TURN_ON_PERIPHERAL, 0, 0);
 }
 

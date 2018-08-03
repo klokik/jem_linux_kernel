@@ -623,7 +623,7 @@ static int etnaviv_pdev_remove(struct platform_device *pdev)
 	return 0;
 }
 
-tatic struct platform_driver etnaviv_platform_driver = {
+static struct platform_driver etnaviv_platform_driver = {
 	.probe      = etnaviv_pdev_probe,
 	.remove     = etnaviv_pdev_remove,
 	.driver     = {

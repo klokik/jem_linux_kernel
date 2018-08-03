@@ -600,7 +600,7 @@ static const struct sdiod_drive_str sdiod_drvstr_tab2_3v3[] = {
 	{4,  0x1}
 };
 
-RCMF_FW_DEF(43143, "brcmfmac43143-sdio");
+BRCMF_FW_DEF(43143, "brcmfmac43143-sdio");
 BRCMF_FW_DEF(43241B0, "brcmfmac43241b0-sdio");
 BRCMF_FW_DEF(43241B4, "brcmfmac43241b4-sdio");
 BRCMF_FW_DEF(43241B5, "brcmfmac43241b5-sdio");
