@@ -11,7 +11,7 @@
 
 / {
 	ocp {
-		sgx:sgx@56000000 {
+/*		sgx:sgx@56000000 {
 			compatible = "omap_gpu", "ti,omap4-gpu", "ti,dra7-sgx544", "img,sgx544";
 			reg = <0x5600fe00 0x200>;
 			reg-names = "gpu_wrapper";
@@ -19,10 +19,12 @@
 			ti,hwmods = "gpu";
 			clocks = <&l3_div_ck>, <&sgx_clk_mux>;
 			clock-names = "sgx_clk_mux";
-		};	
+			status = "disabled";
+		};
+*/
 
 		bb2d: bb2d@59000000 {
-			compatible = "ti,dra7-bb2d","vivante,gc";
+			compatible = "vivante,gc";
 			reg = <0x59000000 0x0700>;
 			interrupts = <GIC_SPI 125 IRQ_TYPE_LEVEL_HIGH>;
 			ti,hwmods = "bb2d";
@@ -30,12 +32,6 @@
 			clock-names = "fclk";
 			status = "disabled";
 		};
-	};
-
-	gpu-subsystem {
-		compatible = "vivante,gc-gpu-subsystem";
-		cores = <&bb2d>;
-		status = "okay";
 	};
 };
 
