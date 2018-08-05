@@ -25,8 +25,8 @@
 
 /* Bluetooth HCI core. */
 
-#define DEBUG 1
-#define VERBOSE_DEBUG 1
+// #define DEBUG 1
+// #define VERBOSE_DEBUG 1
 
 #include <linux/export.h>
 #include <linux/idr.h>
