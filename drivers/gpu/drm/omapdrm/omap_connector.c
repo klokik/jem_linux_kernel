@@ -135,6 +135,8 @@ static int omap_connector_get_modes(struct drm_connector *connector)
 		} else {
 			drm_mode_connector_update_edid_property(
 					connector, NULL);
+
+			omap_connector->hdmi_mode = true; // XXX: dirty override, to get sound
 		}
 
 		kfree(edid);
