@@ -85,6 +85,7 @@
 	};
 
 	sound {
+		status = "disabled";
 		// compatible = "ti,omap-wm8962";
 		compatible = "ti,jem-audio";
 		model = "wm8962-audio";
