@@ -21,7 +21,7 @@
 		reg = <0x80000000 0x40000000>; /* 1 GB */
 	};
 
-	reserved-memory {
+	/* reserved-memory {
 		#address-cells = <1>;
 		#size-cells = <1>;
 		ranges;
@@ -39,7 +39,7 @@
 			reusable;
 			status = "okay";
 		};
-	};
+	}; */
 
 	gpio_keys {
 		compatible = "gpio-keys";
