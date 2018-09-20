@@ -21,9 +21,6 @@
  *
  */
 
-#define DEBUG 1
-#define VERBOSE_DEBUG 1
-
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/serdev.h>
