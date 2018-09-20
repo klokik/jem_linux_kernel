@@ -38,6 +38,7 @@
 #include <linux/dmi.h>
 #include <linux/pm_runtime.h>
 #include <linux/serdev.h>
+#include <linux/regulator/consumer.h>
 
 #include <net/bluetooth/bluetooth.h>
 #include <net/bluetooth/hci_core.h>
@@ -72,6 +73,7 @@
  * @btpu: Apple ACPI method to drive BT_REG_ON pin high ("Bluetooth Power Up")
  * @btpd: Apple ACPI method to drive BT_REG_ON pin low ("Bluetooth Power Down")
  * @clk: clock used by Bluetooth device
+ * @clk_regulator: regulator that powers clock
  * @clk_enabled: whether @clk is prepared and enabled
  * @init_speed: default baudrate of Bluetooth device;
  *	the host UART is initially set to this baudrate so that
@@ -103,6 +105,7 @@ struct bcm_device {
 #endif
 
 	struct clk		*clk;
+	struct regulator	*clk_regulator;
 	bool			clk_enabled;
 
 	u32			init_speed;
@@ -214,10 +217,18 @@ static int bcm_gpio_set_power(struct bcm_device *dev, bool powered)
 {
 	int err;
 
-if (powered && !IS_ERR(dev->clk) && !dev->clk_enabled) {
-		err = clk_prepare_enable(dev->clk);
-		if (err)
-			return err;
+	if (powered && !dev->clk_enabled) {
+		if (!IS_ERR(dev->clk_regulator)) {
+			err = regulator_enable(dev->clk_regulator);
+			if (err)
+				return err;
+		}
+
+		if (!IS_ERR(dev->clk)) {
+			err = clk_prepare_enable(dev->clk);
+			if (err)
+				return err; // TODO: power regulator OFF
+		}
 	}
 
 	err = dev->set_shutdown(dev, powered);
@@ -228,8 +239,13 @@ if (powered && !IS_ERR(dev->clk) && !dev->clk_enabled) {
 	if (err)
 		goto err_revert_shutdown;
 
-	if (!powered && !IS_ERR(dev->clk) && dev->clk_enabled)
-		clk_disable_unprepare(dev->clk);
+	if (!powered && dev->clk_enabled) {
+		if (!IS_ERR(dev->clk))
+			clk_disable_unprepare(dev->clk);
+
+		if (!IS_ERR(dev->clk_regulator))
+			regulator_disable(dev->clk_regulator);
+	}
 
 	dev->clk_enabled = powered;
 
@@ -906,6 +922,7 @@ static int bcm_get_resources(struct bcm_device *dev)
 		return 0;
 
 	dev->clk = devm_clk_get(dev->dev, NULL);
+	dev->clk_regulator = devm_regulator_get(dev->dev, "clk");
 
 	dev->device_wakeup = devm_gpiod_get_optional(dev->dev, "device-wakeup",
 						     GPIOD_OUT_LOW);
@@ -917,7 +934,7 @@ static int bcm_get_resources(struct bcm_device *dev)
 	if (IS_ERR(dev->shutdown))
 		return PTR_ERR(dev->shutdown);
 
-dev->set_device_wakeup = bcm_gpio_set_device_wakeup;
+	dev->set_device_wakeup = bcm_gpio_set_device_wakeup;
 	dev->set_shutdown = bcm_gpio_set_shutdown;
 
 	/* IRQ can be declared in ACPI table as Interrupt or GpioInt */
