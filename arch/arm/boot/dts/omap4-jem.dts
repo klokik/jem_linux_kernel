@@ -70,6 +70,15 @@
 		shutdown-gpios = <&gpio2 11 GPIO_ACTIVE_HIGH>; 	// wlan_en
 	};
 
+	mmc5_pwrseq: wifi_pwrseq {
+		compatible = "mmc-pwrseq-simple";
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&brcmfmac_vmmc_pins>;
+
+		reset-gpios = <&gpio2 11 GPIO_ACTIVE_LOW>;
+	};
+
 	sound {
 		status = "disabled";
 		// compatible = "ti,omap-wm8962";
@@ -431,7 +440,7 @@
 	/* GPIO output for WLAN_EN */
 	brcmfmac_vmmc_pins: pinmux_brcmfmac_vmmc_pins {
 		pinctrl-single,pins = <
-			OMAP4_IOPAD(0x066, PIN_OUTPUT_PULLUP | MUX_MODE3)		/* gpmc_a19.gpio_43 */
+			OMAP4_IOPAD(0x066, PIN_OUTPUT | MUX_MODE3)		/* gpmc_a19.gpio_43 */
 		>;
 	};
 
@@ -494,7 +503,7 @@
 		compatible = "ti,twl6032-ldo2";
 		regulator-min-microvolt = <1000000>;
 		regulator-max-microvolt = <3000000>;
-		regulator-always-on;
+		// regulator-always-on;
 	};
 
 	ldo6: regulator-ldo6 {
@@ -806,20 +815,17 @@
 
 &mmc5 {
 	pinctrl-names = "default";
-	pinctrl-0 = <
-		&brcmfmac_pins
-		&brcmfmac_vmmc_pins
-	>;
-	/*vmmc-supply = <&brcmfmac_vmmc>;*/
+	pinctrl-0 = <&brcmfmac_pins>;
+
 	vmmc-supply = <&vaux1>;
+	mmc-pwrseq = <&mmc5_pwrseq>;
+
+	mmc-ddr-1_8v;
+	mmc-ddr-1_2v;
 
 	bus-width = <4>;
 	non-removable;
 	ti,non-removable;
-	/*cap-power-off-card;*/
-	/*max-frequency = <50000000>;*/
-
-	disable-wp;
 
 	#address-cells = <1>;
 	#size-cells = <0>;
