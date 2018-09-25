@@ -81,72 +81,17 @@
 
 	sound {
 		status = "disabled";
-		// compatible = "ti,omap-wm8962";
+
 		compatible = "ti,jem-audio";
 		model = "wm8962-audio";
 		ssi-controller = <&mcbsp2>;
 		audio-codec = <&wm_codec>;
-		audio-routing =
-			// "Headphone Jack", "HPOUTL",
-			// "Headphone Jack", "HPOUTR",
-			"Ext Spk", "SPKOUTL",
-			"Ext Spk", "SPKOUTR";
-			// "AMIC", "MICBIAS",
-			// "IN3R", "AMIC";
+		audio-routing =	"Headphone", "HPOUTL",
+						"Headphone", "HPOUTR",
+						"Main Speaker", "SPKOUTL",
+						"Main Speaker", "SPKOUTR";
 		// clocks = <&auxclk0_ck>;
 	};
-	// soundcard {
-	// 	compatible = "audio-graph-card";
-	// 	label = "Droid 4 Audio";
-
-	// 	simple-graph-card,widgets =
-	// 		"Speaker", "Earpiece",
-	// 		"Speaker", "Loudspeaker",
-	// 		"Headphone", "Headphone Jack",
-	// 		"Microphone", "Internal Mic";
-
-	// 	simple-graph-card,routing =
-	// 		"Earpiece", "EP",
-	// 		"Loudspeaker", "SPKR",
-	// 		"Headphone Jack", "HSL",
-	// 		"Headphone Jack", "HSR",
-	// 		"MICR", "Internal Mic";
-
-	// 	dais = <&mcbsp2_port>;
-	// };
-	// sound {
-	// 	compatible = "simple-audio-card";
-	// 	simple-audio-card,name = "Jem Audio";
-	// 	simple-audio-card,format = "i2s";
-	// 	// simple-audio-card,mclk-fs = <512>;
-	// 	simple-audio-card,bitclock-master = <&dailink0_codec>;
-	// 	simple-audio-card,frame-master = <&dailink0_codec>;
-
-	// 	simple-audio-card,widgets =
-	// 		"Speaker", "Loudspeaker";
-	// 		// "Headphone", "Headphone Jack";
-
-	// 	simple-audio-card,routing =
-	// 		"Loudspeaker", "SPKOUTL",
-	// 		"Loudspeaker", "SPKOUTR";
-	// 		// "Headphone Jack", "HPOUTL",
-	// 		// "Headphone Jack", "HPOUTR";
-
-	// 	clocks = <&auxclk0_ck>;
-
-	// 	simple-audio-card,hp-det-gpio = <&gpio6 11 GPIO_ACTIVE_HIGH>;
-
-	// 	dailink0_master: simple-audio-card,cpu {
-	// 		sound-dai = <&mcbsp2>;
-	// 		// system-clock-frequency = <24576000>;
-	// 		system-clock-frequency = <22579200>;
-	// 	};
-
-	// 	dailink0_codec: simple-audio-card,codec {
-	// 		sound-dai = <&wm_codec>;
-	// 		system-clock-frequency = <22579200>;
-	// 	};
-	// };
 
 	/* backlight PWM */
 	pwm10: dmtimer-pwm@10 {
@@ -348,8 +293,8 @@
 	mcbsp2_pins: pinmux_mcbsp2_pins {
 		pinctrl-single,pins = <
 			OMAP4_IOPAD(0xf6, PIN_INPUT | MUX_MODE0)		/* abe_mcbsp2_clkx.abe_mcbsp2_clkx */
-			OMAP4_IOPAD(0xf8, PIN_INPUT_PULLDOWN | MUX_MODE0)	/* abe_mcbsp2_dr.abe_mcbsp2_dr */
-			OMAP4_IOPAD(0xfa, PIN_OUTPUT_PULLDOWN | MUX_MODE0)	/* abe_mcbsp2_dx.abe_mcbsp2_dx */
+			OMAP4_IOPAD(0xf8, PIN_INPUT | MUX_MODE0)	/* abe_mcbsp2_dr.abe_mcbsp2_dr */
+			OMAP4_IOPAD(0xfa, PIN_OUTPUT | MUX_MODE0)	/* abe_mcbsp2_dx.abe_mcbsp2_dx */
 			OMAP4_IOPAD(0xfc, PIN_INPUT | MUX_MODE0)		/* abe_mcbsp2_fsx.abe_mcbsp2_fsx */
 		>;
 	};
@@ -469,6 +414,7 @@
 		pinctrl-single,pins = <
 			OMAP4_IOPAD(0x1cc, PIN_INPUT_PULLDOWN | MUX_MODE3)	/* dpm_emu15.gpio_26 */
 			OMAP4_IOPAD(0x17c, PIN_INPUT_PULLUP | MUX_MODE3)	/* kpd_col4.gpio_171 */
+			// OMAP4_IOPAD(0x1a0, PIN_INPUT_PULLUP | MUX_MODE0)	/* sys_nirq2.sys_nirq2 */ // probably only used for twl6040...
 		>;
 	};
 };
@@ -741,7 +687,7 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&wm8962_pins>;
 
-		// interrupts = <26 IRQ_TYPE_LEVEL_HIGH>;	/* gpio_26 */
+		// interrupts = <26 IRQ_TYPE_EDGE_RISING>;	/* gpio_26 */
 		// interrupt-parent = <&gpio1>;
 
 		clocks = <&auxclk0_ck>;

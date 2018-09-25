@@ -211,13 +211,19 @@ static int wm8962_set_bias_level_post(struct snd_soc_card *card,
 
 /* jem machine dapm widgets */
 static const struct snd_soc_dapm_widget jem_wm8962_dapm_widgets[] = {
-	// SND_SOC_DAPM_HP("HP", NULL),
+	SND_SOC_DAPM_HP("Headphone", NULL),
 	SND_SOC_DAPM_SPK("Main Speaker", NULL),
 };
 
+static const struct snd_kcontrol_new bowser_controls[] = {
+	SOC_DAPM_PIN_SWITCH("DMICDAT"),
+	SOC_DAPM_PIN_SWITCH("Headphone"),
+	SOC_DAPM_PIN_SWITCH("Main Speaker"),
+};
+
 static const struct snd_soc_dapm_route audio_map[] = {
-	// { "HP", NULL, "HPOUTL" },
-	// { "HP", NULL, "HPOUTR" },
+	{ "Headphone", NULL, "HPOUTL" },
+	{ "Headphone", NULL, "HPOUTR" },
 
 	{ "Main Speaker", NULL, "SPKOUTL" },
 	{ "Main Speaker", NULL, "SPKOUTR" },
@@ -227,7 +233,7 @@ static const struct snd_soc_dapm_route audio_map[] = {
 static struct snd_soc_dai_link jem_dai_links[] = {
 	{
 		.name = "JemAudio",
-		.stream_name = "Playback",
+		.stream_name = "wm8962",
 		.codec_dai_name = "wm8962",
 		.dai_fmt = SND_SOC_DAIFMT_DSP_B | SND_SOC_DAIFMT_NB_NF |
 			   SND_SOC_DAIFMT_CBM_CFM,
@@ -245,13 +251,13 @@ static struct snd_soc_card snd_soc_jem = {
 	.set_bias_level	= wm8962_set_bias_level,
 	.set_bias_level_post = wm8962_set_bias_level_post,
 
-	// TODO:
-	// .controls
-	// .num_controls
 	.dapm_widgets = jem_wm8962_dapm_widgets,
 	.num_dapm_widgets = ARRAY_SIZE(jem_wm8962_dapm_widgets),
 	.dapm_routes = audio_map,
 	.num_dapm_routes = ARRAY_SIZE(audio_map),
+	.controls = bowser_controls,
+	.num_controls = ARRAY_SIZE(bowser_controls),
+
 	.fully_routed = true,
 };
 
