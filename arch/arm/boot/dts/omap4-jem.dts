@@ -823,6 +823,8 @@
 	mmc-ddr-1_8v;
 	mmc-ddr-1_2v;
 
+	keep-power-in-suspend;
+
 	bus-width = <4>;
 	non-removable;
 	ti,non-removable;
