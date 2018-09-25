@@ -971,16 +971,13 @@ static void bond_poll_controller(struct net_device *bond_dev)
 	struct slave *slave = NULL;
 	struct list_head *iter;
 	struct ad_info ad_info;
-	struct netpoll_info *ni;
-	const struct net_device_ops *ops;
 
 	if (BOND_MODE(bond) == BOND_MODE_8023AD)
 		if (bond_3ad_get_active_agg_info(bond, &ad_info))
 			return;
 
 	bond_for_each_slave_rcu(bond, slave, iter) {
-		ops = slave->dev->netdev_ops;
-		if (!bond_slave_is_up(slave) || !ops->ndo_poll_controller)
+		if (!bond_slave_is_up(slave))
 			continue;
 
 		if (BOND_MODE(bond) == BOND_MODE_8023AD) {
@@ -992,11 +989,7 @@ static void bond_poll_controller(struct net_device *bond_dev)
 				continue;
 		}
 
-		ni = rcu_dereference_bh(slave->dev->npinfo);
-		if (down_trylock(&ni->dev_lock))
-			continue;
-		ops->ndo_poll_controller(slave->dev);
-		up(&ni->dev_lock);
+		netpoll_poll_dev(slave->dev);
 	}
 }
 
@@ -1717,6 +1710,8 @@ int bond_enslave(struct net_device *bond_dev, struct net_device *slave_dev,
 		goto err_upper_unlink;
 	}
 
+	bond->nest_level = dev_get_nest_level(bond_dev) + 1;
+
 	/* If the mode uses primary, then the following is handled by
 	 * bond_change_active_slave().
 	 */
@@ -1764,7 +1759,6 @@ int bond_enslave(struct net_device *bond_dev, struct net_device *slave_dev,
 	if (bond_mode_can_use_xmit_hash(bond))
 		bond_update_slave_arr(bond, NULL);
 
-	bond->nest_level = dev_get_nest_level(bond_dev);
 
 	netdev_info(bond_dev, "Enslaving %s as %s interface with %s link\n",
 		    slave_dev->name,
@@ -3415,6 +3409,13 @@ static void bond_fold_stats(struct rtnl_link_stats64 *_res,
 	}
 }
 
+static int bond_get_nest_level(struct net_device *bond_dev)
+{
+	struct bonding *bond = netdev_priv(bond_dev);
+
+	return bond->nest_level;
+}
+
 static void bond_get_stats(struct net_device *bond_dev,
 			   struct rtnl_link_stats64 *stats)
 {
@@ -3423,7 +3424,7 @@ static void bond_get_stats(struct net_device *bond_dev,
 	struct list_head *iter;
 	struct slave *slave;
 
-	spin_lock(&bond->stats_lock);
+	spin_lock_nested(&bond->stats_lock, bond_get_nest_level(bond_dev));
 	memcpy(stats, &bond->bond_stats, sizeof(*stats));
 
 	rcu_read_lock();
@@ -4094,7 +4095,8 @@ static inline int bond_slave_override(struct bonding *bond,
 
 
 static u16 bond_select_queue(struct net_device *dev, struct sk_buff *skb,
-			     void *accel_priv, select_queue_fallback_t fallback)
+			     struct net_device *sb_dev,
+			     select_queue_fallback_t fallback)
 {
 	/* This helper function exists to help dev_pick_tx get the correct
 	 * destination queue.  Using a helper function skips a call to
@@ -4227,6 +4229,7 @@ static const struct net_device_ops bond_netdev_ops = {
 	.ndo_neigh_setup	= bond_neigh_setup,
 	.ndo_vlan_rx_add_vid	= bond_vlan_rx_add_vid,
 	.ndo_vlan_rx_kill_vid	= bond_vlan_rx_kill_vid,
+	.ndo_get_lock_subclass  = bond_get_nest_level,
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	.ndo_netpoll_setup	= bond_netpoll_setup,
 	.ndo_netpoll_cleanup	= bond_netpoll_cleanup,
@@ -4725,6 +4728,7 @@ static int bond_init(struct net_device *bond_dev)
 	if (!bond->wq)
 		return -ENOMEM;
 
+	bond->nest_level = SINGLE_DEPTH_NESTING;
 	netdev_lockdep_set_classes(bond_dev);
 
 	list_add_tail(&bond->bond_list, &bn->dev_list);
