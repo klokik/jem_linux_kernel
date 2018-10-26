@@ -454,6 +454,14 @@
 			ti,timer-dsp;
 		};
 
+		timer10: timer@48086000 {
+			compatible = "ti,omap3430-timer";
+			reg = <0x48086000 0x80>;
+			interrupts = <GIC_SPI 46 IRQ_TYPE_LEVEL_HIGH>;
+			ti,hwmods = "timer10";
+			ti,timer-pwm;
+		};
+
 		aes1: aes@4b501000 {
 			compatible = "ti,omap4-aes";
 			ti,hwmods = "aes1";

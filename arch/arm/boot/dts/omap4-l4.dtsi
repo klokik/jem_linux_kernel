@@ -1930,38 +1930,38 @@
 			};
 		};
 
-		target-module@86000 {			/* 0x48086000, ap 43 24.0 */
-			compatible = "ti,sysc-omap2-timer", "ti,sysc";
-			ti,hwmods = "timer10";
-			reg = <0x86000 0x4>,
-			      <0x86010 0x4>,
-			      <0x86014 0x4>;
-			reg-names = "rev", "sysc", "syss";
-			ti,sysc-mask = <(SYSC_OMAP2_CLOCKACTIVITY |
-					 SYSC_OMAP2_EMUFREE |
-					 SYSC_OMAP2_ENAWAKEUP |
-					 SYSC_OMAP2_SOFTRESET |
-					 SYSC_OMAP2_AUTOIDLE)>;
-			ti,sysc-sidle = <SYSC_IDLE_FORCE>,
-					<SYSC_IDLE_NO>,
-					<SYSC_IDLE_SMART>;
-			ti,syss-mask = <1>;
-			/* Domains (V, P, C): core, l4per_pwrdm, l4_per_clkdm */
-			clocks = <&l4_per_clkctrl OMAP4_TIMER10_CLKCTRL 0>;
-			clock-names = "fck";
-			#address-cells = <1>;
-			#size-cells = <1>;
-			ranges = <0x0 0x86000 0x1000>;
+		// target-module@86000 {			/* 0x48086000, ap 43 24.0 */
+		// 	compatible = "ti,sysc-omap2-timer", "ti,sysc";
+		// 	ti,hwmods = "timer10";
+		// 	reg = <0x86000 0x4>,
+		// 	      <0x86010 0x4>,
+		// 	      <0x86014 0x4>;
+		// 	reg-names = "rev", "sysc", "syss";
+		// 	ti,sysc-mask = <(SYSC_OMAP2_CLOCKACTIVITY |
+		// 			 SYSC_OMAP2_EMUFREE |
+		// 			 SYSC_OMAP2_ENAWAKEUP |
+		// 			 SYSC_OMAP2_SOFTRESET |
+		// 			 SYSC_OMAP2_AUTOIDLE)>;
+		// 	ti,sysc-sidle = <SYSC_IDLE_FORCE>,
+		// 			<SYSC_IDLE_NO>,
+		// 			<SYSC_IDLE_SMART>;
+		// 	ti,syss-mask = <1>;
+		// 	/* Domains (V, P, C): core, l4per_pwrdm, l4_per_clkdm */
+		// 	clocks = <&l4_per_clkctrl OMAP4_TIMER10_CLKCTRL 0>;
+		// 	clock-names = "fck";
+		// 	#address-cells = <1>;
+		// 	#size-cells = <1>;
+		// 	ranges = <0x0 0x86000 0x1000>;
 
-			timer10: timer@0 {
-				compatible = "ti,omap3430-timer";
-				reg = <0x0 0x80>;
-				clocks = <&l4_per_clkctrl OMAP4_TIMER10_CLKCTRL 24>;
-				clock-names = "fck";
-				interrupts = <GIC_SPI 46 IRQ_TYPE_LEVEL_HIGH>;
-				ti,timer-pwm;
-			};
-		};
+		// 	timer10: timer@0 {
+		// 		compatible = "ti,omap3430-timer";
+		// 		reg = <0x0 0x80>;
+		// 		clocks = <&l4_per_clkctrl OMAP4_TIMER10_CLKCTRL 24>;
+		// 		clock-names = "fck";
+		// 		interrupts = <GIC_SPI 46 IRQ_TYPE_LEVEL_HIGH>;
+		// 		ti,timer-pwm;
+		// 	};
+		// };
 
 		target-module@88000 {			/* 0x48088000, ap 45 2e.0 */
 			compatible = "ti,sysc-omap4-timer", "ti,sysc";
