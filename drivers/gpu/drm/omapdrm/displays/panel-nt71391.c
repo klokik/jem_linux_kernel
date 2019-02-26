@@ -37,21 +37,14 @@
 
 struct panel_drv_data {
 	struct omap_dss_device dssdev;
-	struct omap_dss_device *in;
 
-#ifdef USE_OMAP_TIMINGS
-	struct omap_video_timings timings;
-#else
 	struct videomode vm;
-#endif
 
 	struct device_node *backlight_node;
 	struct backlight_device *backlight;
 	struct delayed_work backlight_work;
 
 	struct platform_device *pdev;
-
-//	struct omap_dsi_pin_config pin_config;
 
 	struct mutex lock;
 
@@ -62,7 +55,6 @@ struct panel_drv_data {
 	int channel1;
 
 	bool intro_printed;
-//	bool enabled;
 };
 
 #define NT71391_WIDTH		1920
@@ -117,25 +109,25 @@ static void pdsivm_power_off(struct panel_drv_data *ddata);
 
 static int pdsivm_dcs_write_0(struct panel_drv_data *ddata, u8 dcs_cmd)
 {
-	struct omap_dss_device *in = ddata->in;
+	struct omap_dss_device *in = ddata->dssdev.src;
 
 	if (dcs_cmd == MIPI_DSI_TURN_ON_PERIPHERAL)
-		return in->ops.dsi->turn_on_periph(in, ddata->channel0);
+		return in->ops->dsi.turn_on_periph(in, ddata->channel0);
 	else
-		return in->ops.dsi->dcs_write(in, ddata->channel0, &dcs_cmd, 1);
+		return in->ops->dsi.dcs_write(in, ddata->channel0, &dcs_cmd, 1);
 }
 
 static int pdsivm_dcs_write_1(struct panel_drv_data *ddata, u8 dcs_cmd, u8 param)
 {
-	struct omap_dss_device *in = ddata->in;
+	struct omap_dss_device *in = ddata->dssdev.src;
 	u8 buf[2] = { dcs_cmd, param };
 
-	return in->ops.dsi->dcs_write(in, ddata->channel0, buf, 2);
+	return in->ops->dsi.dcs_write(in, ddata->channel0, buf, 2);
 }
 
 static int pdsivm_get_id(struct panel_drv_data *ddata, u8 *id1, u8 *id2, u8 *id3)
 {
-	struct omap_dss_device *in = ddata->in;
+	struct omap_dss_device *in = ddata->dssdev.src;
 	u8 buf[2];
 	int r;
 
@@ -143,27 +135,27 @@ static int pdsivm_get_id(struct panel_drv_data *ddata, u8 *id1, u8 *id2, u8 *id3
 
 	buf[0] = MCS_LOCK;
 	buf[1] = MCS_PARAM_LOCK;
-	r = in->ops.dsi->gen_write_nosync(in, ddata->channel0, buf, 2);
+	r = in->ops->dsi.gen_write_nosync(in, ddata->channel0, buf, 2);
 	if (r)
 		return r;
 
 	buf[0] = MCS_READ_ID1;
-	r = in->ops.dsi->gen_read(in, ddata->channel0, buf, 1, id1, 1);
+	r = in->ops->dsi.gen_read(in, ddata->channel0, buf, 1, id1, 1);
 	if (r)
 		return r;
 
 	buf[0] = MCS_READ_ID2;
-	r = in->ops.dsi->gen_read(in, ddata->channel0, buf, 1, id2, 1);
+	r = in->ops->dsi.gen_read(in, ddata->channel0, buf, 1, id2, 1);
 	if (r)
 		return r;
 
 	buf[0] = MCS_READ_ID3;
-	r = in->ops.dsi->gen_read(in, ddata->channel0, buf, 1, id3, 1);
+	r = in->ops->dsi.gen_read(in, ddata->channel0, buf, 1, id3, 1);
 	if (r)
 		return r;
 
 	buf[0] = MCS_UNLOCK;
-	r = in->ops.dsi->gen_write_nosync(in, ddata->channel0, buf, 1);
+	r = in->ops->dsi.gen_write_nosync(in, ddata->channel0, buf, 1);
 	if (r)
 		return r;
 
@@ -172,7 +164,7 @@ static int pdsivm_get_id(struct panel_drv_data *ddata, u8 *id1, u8 *id2, u8 *id3
 
 void nt71391_set_clk_153(struct panel_drv_data *ddata)
 {
-	struct omap_dss_device  *in = ddata->in;
+	struct omap_dss_device  *in = ddata->dssdev.src;
 
 	u8 buf[2];
 	int r = 0;
@@ -182,7 +174,7 @@ void nt71391_set_clk_153(struct panel_drv_data *ddata)
 	buf[0] = 0xF3;
 	buf[1] = 0xA0;
 
-	r = in->ops.dsi->gen_write_nosync(in, ddata->channel0, buf, 2);
+	r = in->ops->dsi.gen_write_nosync(in, ddata->channel0, buf, 2);
 	if(r < 0) {
 		dev_err(&ddata->pdev->dev, "Error in sending ulock cmd\n");
 		goto err;
@@ -193,7 +185,7 @@ void nt71391_set_clk_153(struct panel_drv_data *ddata)
 	buf[0] = 0xac;	// ADDR=AC
 	buf[1] = 0x2b;	// CLK=153
 
-	r = in->ops.dsi->gen_write_nosync(in, ddata->channel0, buf, 2);
+	r = in->ops->dsi.gen_write_nosync(in, ddata->channel0, buf, 2);
 	if(r < 0) {
 		dev_err(&ddata->pdev->dev, "Error in setting clk cmd\n");
 		goto err;
@@ -204,7 +196,7 @@ void nt71391_set_clk_153(struct panel_drv_data *ddata)
 	buf[0] = 0;
 	buf[1] = 0;
 
-	r = in->ops.dsi->gen_write_nosync(in, ddata->channel0, buf, 2);
+	r = in->ops->dsi.gen_write_nosync(in, ddata->channel0, buf, 2);
 	if(r < 0) {
 		dev_err(&ddata->pdev->dev, "Error in sending lock cmd\n");
 		goto err;
@@ -216,10 +208,9 @@ err:
 	return;
 }
 
-static int pdsivm_connect(struct omap_dss_device *dssdev)
+static int pdsivm_connect(struct omap_dss_device *in, struct omap_dss_device *dssdev)
 {
 	struct panel_drv_data *ddata = to_panel_data(dssdev);
-	struct omap_dss_device *in = ddata->in;
 	struct device *dev = &ddata->pdev->dev;
 	int r;
 
@@ -227,58 +218,51 @@ static int pdsivm_connect(struct omap_dss_device *dssdev)
 	if (omapdss_device_is_connected(dssdev))
 		return 0;
 
-	r = in->ops.dsi->connect(in, dssdev);
-	if (r) {
-		dev_err(dev, "Failed to connect to video source\n");
-		return r;
-	}
-
-	r = in->ops.dsi->request_vc(ddata->in, &ddata->channel0);
+	r = in->ops->dsi.request_vc(in, &ddata->channel0);
 	if (r) {
 		dev_err(dev, "failed to get virtual channel0\n");
-		goto err_req_vc;
+		goto err_req_vc0;
 	}
-	r = in->ops.dsi->set_vc_id(ddata->in, ddata->channel0, 0);
+	r = in->ops->dsi.set_vc_id(in, ddata->channel0, 0);
 	if (r) {
 		dev_err(dev, "failed to set VC_ID0\n");
-		goto err_vc_id;
+		goto err_vc_id0;
 	}
 
-	r = in->ops.dsi->request_vc(ddata->in, &ddata->channel1);
+	r = in->ops->dsi.request_vc(in, &ddata->channel1);
 	if (r) {
 		dev_err(dev, "failed to get virtual channel1\n");
-		goto err_req_vc;
+		goto err_req_vc1;
 	}
-	r = in->ops.dsi->set_vc_id(ddata->in, ddata->channel1, 0);
+	r = in->ops->dsi.set_vc_id(in, ddata->channel1, 0);
 	if (r) {
 		dev_err(dev, "failed to set VC_ID1\n");
-		goto err_vc_id;
+		goto err_vc_id1;
 	}
 
 	return 0;
 
-err_vc_id:
-	in->ops.dsi->release_vc(ddata->in, ddata->channel0);
-	in->ops.dsi->release_vc(ddata->in, ddata->channel1);
-err_req_vc:
-	in->ops.dsi->disconnect(in, dssdev);
+err_vc_id1:
+	in->ops->dsi.release_vc(in, ddata->channel1);
+err_req_vc1:
+err_vc_id0:
+	in->ops->dsi.release_vc(in, ddata->channel0);
+err_req_vc0:
 	return r;
 }
 
-static void pdsivm_disconnect(struct omap_dss_device *dssdev)
+static void pdsivm_disconnect(struct omap_dss_device *in, struct omap_dss_device *dssdev)
 {
 	struct panel_drv_data *ddata = to_panel_data(dssdev);
-	struct omap_dss_device *in = ddata->in;
 
 	if (!omapdss_device_is_connected(dssdev))
 		return;
 
-	in->ops.dsi->release_vc(in, ddata->channel0);
-	in->ops.dsi->release_vc(in, ddata->channel1);
-	in->ops.dsi->disconnect(in, dssdev);
+	in->ops->dsi.release_vc(in, ddata->channel0);
+	in->ops->dsi.release_vc(in, ddata->channel1);
 }
 
-/* Backlight device might be initialized later then the panel
+/* Backlight device might be initialized later than the panel
  * 	but if we defer panel probe, omapdrm will never probe it again.
  * 	Return: 1 on successful fetch, 0 otherwise
  * 	device node is put as soon as backlight device is fetched
@@ -336,7 +320,7 @@ out:
 static int pdsivm_enable(struct omap_dss_device *dssdev)
 {
 	struct panel_drv_data *ddata = to_panel_data(dssdev);
-	struct omap_dss_device *in = ddata->in;
+	struct omap_dss_device *in = ddata->dssdev.src;
 	int r;
 
 	dev_dbg(&ddata->pdev->dev, "enable\n");
@@ -349,11 +333,11 @@ static int pdsivm_enable(struct omap_dss_device *dssdev)
 
 	mutex_lock(&ddata->lock);
 
-	in->ops.dsi->bus_lock(in);
+	in->ops->dsi.bus_lock(in);
 
 	r = pdsivm_power_on(ddata);
 
-	in->ops.dsi->bus_unlock(in);
+	in->ops->dsi.bus_unlock(in);
 
 	if (r)
 		dev_err(&ddata->pdev->dev, "Enable failed\n");
@@ -377,20 +361,19 @@ static int pdsivm_enable(struct omap_dss_device *dssdev)
 static void pdsivm_disable(struct omap_dss_device *dssdev)
 {
 	struct panel_drv_data *ddata = to_panel_data(dssdev);
-	struct omap_dss_device *in = ddata->in;
+	struct omap_dss_device *in = ddata->dssdev.src;
 
 	dev_dbg(&ddata->pdev->dev, "disable\n");
 
 	if (!omapdss_device_is_enabled(dssdev))
-	//if (dssdev->state != OMAP_DSS_DISPLAY_ACTIVE)
 		return;
 
 	mutex_lock(&ddata->lock);
-	in->ops.dsi->bus_lock(in);
+	in->ops->dsi.bus_lock(in);
 
 	pdsivm_power_off(ddata);
 
-	in->ops.dsi->bus_unlock(in);
+	in->ops->dsi.bus_unlock(in);
 
 	dssdev->state = OMAP_DSS_DISPLAY_DISABLED;
 
@@ -404,37 +387,12 @@ static void pdsivm_disable(struct omap_dss_device *dssdev)
 	dev_dbg(&ddata->pdev->dev, "disable done\n");
 }
 
-#ifdef USE_OMAP_TIMINGS
 static void pdsivm_set_timings(struct omap_dss_device *dssdev,
-		struct omap_video_timings *timings)
-{
-	struct panel_drv_data *ddata = to_panel_data(dssdev);
-
-	ddata->timings = *timings;
-	dssdev->panel.timings = *timings;
-}
-
-static void pdsivm_get_timings(struct omap_dss_device *dssdev,
-		struct omap_video_timings *timings)
-{
-	struct panel_drv_data *ddata = to_panel_data(dssdev);
-
-	*timings = ddata->timings;
-}
-
-static int pdsivm_check_timings(struct omap_dss_device *dssdev,
-		struct omap_video_timings *timings)
-{
-	return 0;
-}
-#else
-static void pdsivm_set_timings(struct omap_dss_device *dssdev,
-		struct videomode *vm)
+		const struct videomode *vm)
 {
 	struct panel_drv_data *ddata = to_panel_data(dssdev);
 
 	ddata->vm = *vm;
-	dssdev->panel.vm = *vm;
 }
 
 static void pdsivm_get_timings(struct omap_dss_device *dssdev,
@@ -450,16 +408,8 @@ static int pdsivm_check_timings(struct omap_dss_device *dssdev,
 {
 	return 0;
 }
-#endif /* USE_OMAP_TIMINGS */
 
-/*static void pdsivm_get_resolution(struct omap_dss_device *dssdev,
-				  u16 *xres, u16 *yres)
-{
-	*xres = dssdev->panel.timings.x_res;
-	*yres = dssdev->panel.timings.y_res;
-}*/
-
-static struct omap_dss_driver pdsivm_ops = {
+static struct omap_dss_device_ops pdsivm_dss_ops = {
 	.connect	= pdsivm_connect,
 	.disconnect	= pdsivm_disconnect,
 
@@ -469,9 +419,17 @@ static struct omap_dss_driver pdsivm_ops = {
 	.set_timings	= pdsivm_set_timings,
 	.get_timings	= pdsivm_get_timings,
 	.check_timings	= pdsivm_check_timings,
+};
 
-//	.get_resolution	= pdsivm_get_resolution,
-	// .get_resolution	= omapdss_default_get_resolution,
+static void pdsivm_get_size(struct omap_dss_device *dssdev,
+		unsigned int *width, unsigned int *height)
+{
+	*width = 193;
+	*height = 121;
+}
+
+static struct omap_dss_driver pdsivm_dss_driver = {
+	.get_size = pdsivm_get_size,
 };
 
 /* static void pdsivm_hw_reset(struct omap_dss_device *dssdev)
@@ -489,13 +447,10 @@ static int pdsivm_probe_of(struct platform_device *pdev)
 {
 	struct panel_drv_data *ddata = platform_get_drvdata(pdev);
 	struct device_node *node = pdev->dev.of_node;
-	struct omap_dss_device *in;
-	// int r;
-	// struct display_timing timing;
-	// struct videomode vm;
+
 	struct gpio_desc *gpio;
 
-	dev_dbg(&pdev->dev, "probe of\n");
+	dev_info(&pdev->dev, "probe of\n");
 
 	gpio = devm_gpiod_get(&pdev->dev, "enable", GPIOD_OUT_LOW);
 	if (IS_ERR(gpio)) {
@@ -516,24 +471,6 @@ static int pdsivm_probe_of(struct platform_device *pdev)
 		INIT_DELAYED_WORK(&ddata->backlight_work, backlight_fetch_work);
 		schedule_delayed_work(&ddata->backlight_work, HZ/2);
 	}
-
-/*	r = of_get_display_timing(node, "panel-timing", &timing);
-	if (r) {
-		dev_err(&pdev->dev, "failed to get video timing\n");
-		return r;
-	}
-
-	videomode_from_timing(&timing, &vm);
-	videomode_to_omap_video_timings(&vm, &ddata->timings);
-*/
-
-	in = omapdss_of_find_source_for_first_ep(node);
-	if (IS_ERR(in)) {
-		dev_err(&pdev->dev, "Failed to find video source\n");
-		return PTR_ERR(in);
-	}
-
-	ddata->in = in;
 
 	return 0;
 }
@@ -561,63 +498,46 @@ static int pdsivm_probe(struct platform_device *pdev)
 	if (r)
 		return r;
 
-#ifdef USE_OMAP_TIMINGS
-	ddata->timings = nt71391_timings;
-#else
 	ddata->vm = nt71391_vm;
-#endif
 
 	dssdev = &ddata->dssdev;
 	dssdev->dev = dev;
-	dssdev->driver = &pdsivm_ops;
-#ifdef USE_OMAP_TIMINGS
-	dssdev->panel.timings = ddata->timings;
-#else
-	dssdev->panel.vm = ddata->vm;
-#endif
+	dssdev->ops = &pdsivm_dss_ops;
+	dssdev->driver = &pdsivm_dss_driver;
 	dssdev->type = OMAP_DISPLAY_TYPE_DSI;
 	dssdev->owner = THIS_MODULE;
+	dssdev->of_ports = BIT(0);
 
-	r = omapdss_register_display(dssdev);
-	if (r) {
-		dev_err(dev, "Failed to register panel\n");
-		goto err_reg;
-	}
+	omapdss_display_init(dssdev);
+	omapdss_device_register(dssdev);
 
 	mutex_init(&ddata->lock);
 
 	dev_dbg(dev, "probe done\n");
 
 	return 0;
-
-err_reg:
-	omap_dss_put_device(ddata->in);
-	return r;
 }
 
 static int __exit pdsivm_remove(struct platform_device *pdev)
 {
 	struct panel_drv_data *ddata = platform_get_drvdata(pdev);
 	struct omap_dss_device *dssdev = &ddata->dssdev;
-	struct omap_dss_device *in = ddata->in;
 
 	dev_dbg(&pdev->dev, "remove\n");
 
-	cancel_delayed_work(&ddata->backlight_work);
+	cancel_delayed_work_sync(&ddata->backlight_work);
 
-	omapdss_unregister_display(dssdev);
+	omapdss_device_unregister(dssdev);
 
 	pdsivm_disable(dssdev);
-	pdsivm_disconnect(dssdev);
-
-	omap_dss_put_device(in);
+	omapdss_device_disconnect(dssdev->src, dssdev);
 
 	return 0;
 }
 
 static int pdsivm_power_on(struct panel_drv_data *ddata)
 {
-	struct omap_dss_device *in = ddata->in;
+	struct omap_dss_device *in = ddata->dssdev.src;
 	u8 id1, id2, id3;
 	int r;
 
@@ -644,11 +564,7 @@ static int pdsivm_power_on(struct panel_drv_data *ddata)
 		.mode = OMAP_DSS_DSI_VIDEO_MODE,
 		.pixel_format = OMAP_DSS_DSI_FMT_RGB666_PACKED,
 		// .pixel_format = OMAP_DSS_DSI_FMT_RGB888,
-#ifdef USE_OMAP_TIMINGS
-		.timings = &ddata->timings,
-#else
 		.vm = &ddata->vm,
-#endif
 		.hs_clk_min = 125000000,
 		.hs_clk_max = 450000000,
 		.lp_clk_min = 7000000,
@@ -657,19 +573,6 @@ static int pdsivm_power_on(struct panel_drv_data *ddata)
 		.trans_mode = OMAP_DSS_DSI_BURST_MODE,
 	};
 
-/*	if (ddata->pin_config.num_pins > 0) {
-		dev_dbg(&ddata->pdev->dev, "configure pins\n");
-		r = in->ops.dsi->configure_pins(in, &ddata->pin_config);
-		if (r) {
-			dev_err(&ddata->pdev->dev,
-				"failed to configure DSI pins\n");
-			goto err0;
-		}
-	}
-	else
-		dev_err(&ddata->pdev->dev, "not configure pins\n");
-*/
-
 	dev_dbg(&ddata->pdev->dev, "power on\n");
 
 	// power supply off
@@ -677,13 +580,13 @@ static int pdsivm_power_on(struct panel_drv_data *ddata)
 	gpiod_set_value_cansleep(ddata->enable_gpio, 0);
 	msleep(100);
 
-	r = in->ops.dsi->set_config(in, &dsi_config);
+	r = in->ops->dsi.set_config(in, &dsi_config);
 	if (r) {
 		dev_err(&ddata->pdev->dev, "Failed to configure DSI\n");
 		goto err0;
 	}
 
-	r = in->ops.dsi->enable(in);
+	r = in->ops->enable(in);
 	if (r) {
 		dev_err(&ddata->pdev->dev, "Failed to enable DSI\n");
 		goto err0;
@@ -735,8 +638,8 @@ static int pdsivm_power_on(struct panel_drv_data *ddata)
 	r = pdsivm_dcs_write_0(ddata, MIPI_DSI_TURN_ON_PERIPHERAL);
 	if (r)	goto err;
 
-	in->ops.dsi->enable_hs(in, ddata->channel0, true);
-	in->ops.dsi->enable_hs(in, ddata->channel1, true);
+	in->ops->dsi.enable_hs(in, ddata->channel0, true);
+	in->ops->dsi.enable_hs(in, ddata->channel1, true);
 
 
 /*	r = pdsivm_dcs_write_1(ddata, MIPI_DCS_SET_PIXEL_FORMAT,
@@ -749,10 +652,8 @@ static int pdsivm_power_on(struct panel_drv_data *ddata)
 		goto err;
 */
 
-	r = in->ops.dsi->enable_video_output(in, ddata->channel0);
+	r = in->ops->dsi.enable_video_output(in, ddata->channel0);
 	if (r)	goto err;
-
-//	ddata->enabled = 1;
 
 	if (!ddata->intro_printed) {
 		dev_dbg(&ddata->pdev->dev, "NT71391 Panel revision %02x.%02x.%02x\n",
@@ -766,7 +667,7 @@ static int pdsivm_power_on(struct panel_drv_data *ddata)
 err:
 	dev_err(&ddata->pdev->dev, "error while enabling panel, issuing HW reset\n");
 
-	in->ops.dsi->disable(in, false, false);
+	in->ops->dsi.disable(in, false, false);
 	gpiod_set_value_cansleep(ddata->cabc_gpio, 0);
 	gpiod_set_value_cansleep(ddata->enable_gpio, 0);
 	mdelay(20);
@@ -777,16 +678,14 @@ err0:
 
 static void pdsivm_power_off(struct panel_drv_data *ddata)
 {
-	struct omap_dss_device *in = ddata->in;
+	struct omap_dss_device *in = ddata->dssdev.src;
 
 	dev_dbg(&ddata->pdev->dev, "power off\n");
 
-//	ddata->enabled = false;
+	in->ops->dsi.disable_video_output(in, ddata->channel0);
+	in->ops->dsi.disable_video_output(in, ddata->channel1);
 
-	in->ops.dsi->disable_video_output(in, ddata->channel0);
-	in->ops.dsi->disable_video_output(in, ddata->channel1);
-
-	in->ops.dsi->disable(in, false, false);
+	in->ops->dsi.disable(in, false, false);
 	mdelay(10);
 
 	gpiod_set_value_cansleep(ddata->cabc_gpio, 0);
