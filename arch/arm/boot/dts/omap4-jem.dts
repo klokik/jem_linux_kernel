@@ -809,7 +809,7 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&bt_pins>;
 
-		clk-supply = <&clk32kaudio>;
+		vddio-supply = <&clk32kaudio>;
 
 		interrupt-parent = <&gpio4>;
 		interrupts = <18 IRQ_TYPE_LEVEL_HIGH>;
