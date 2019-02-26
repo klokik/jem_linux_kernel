@@ -12,7 +12,7 @@
 #include <asm/mach-types.h>
 #include <linux/platform_data/asoc-ti-mcbsp.h>
 
-#include "mcbsp.h"
+// #include "mcbsp.h"
 #include "omap-mcbsp.h"
 
 #include "../codecs/wm8962.h"
@@ -72,7 +72,9 @@ static int jem_hw_params(struct snd_pcm_substream *substream,
 		return ret;
 	}
 
-	omap_mcbsp_set_tx_threshold(mcbsp, params_channels(params));
+	// omap_mcbsp_set_tx_threshold(mcbsp, params_channels(params));
+	// omap_mcbsp_set_threshold(mcbsp, params_channels(params)); //replace
+	// with this
 
 	dev_dbg(codec_dai->dev, "%s() - exit\n", __func__);
 	return ret;

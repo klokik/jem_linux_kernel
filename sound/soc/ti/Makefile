@@ -31,6 +31,7 @@ snd-soc-omap-twl4030-objs := omap-twl4030.o
 snd-soc-omap-abe-twl6040-objs := omap-abe-twl6040.o
 snd-soc-ams-delta-objs := ams-delta.o
 snd-soc-omap-hdmi-objs := omap-hdmi.o
+snd-soc-omap-wm8962-objs := omap-wm8962-jem.o
 snd-soc-osk5912-objs := osk5912.o
 
 obj-$(CONFIG_SND_SOC_DAVINCI_EVM) += snd-soc-davinci-evm.o
@@ -42,3 +43,4 @@ obj-$(CONFIG_SND_SOC_OMAP_ABE_TWL6040) += snd-soc-omap-abe-twl6040.o
 obj-$(CONFIG_SND_SOC_OMAP_AMS_DELTA) += snd-soc-ams-delta.o
 obj-$(CONFIG_SND_SOC_OMAP_HDMI) += snd-soc-omap-hdmi.o
 obj-$(CONFIG_SND_SOC_OMAP_OSK5912) += snd-soc-osk5912.o
+obj-$(CONFIG_SND_SOC_OMAP_WM8962) += snd-soc-omap-wm8962.o
