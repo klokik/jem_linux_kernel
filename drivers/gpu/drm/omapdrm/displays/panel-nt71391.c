@@ -639,7 +639,7 @@ static int pdsivm_power_on(struct panel_drv_data *ddata)
 	if (r)	goto err;
 
 	in->ops->dsi.enable_hs(in, ddata->channel0, true);
-	in->ops->dsi.enable_hs(in, ddata->channel1, true);
+	// in->ops->dsi.enable_hs(in, ddata->channel1, true);
 
 
 /*	r = pdsivm_dcs_write_1(ddata, MIPI_DCS_SET_PIXEL_FORMAT,
@@ -683,15 +683,15 @@ static void pdsivm_power_off(struct panel_drv_data *ddata)
 	dev_dbg(&ddata->pdev->dev, "power off\n");
 
 	in->ops->dsi.disable_video_output(in, ddata->channel0);
-	in->ops->dsi.disable_video_output(in, ddata->channel1);
+	// in->ops->dsi.disable_video_output(in, ddata->channel1);
 
 	in->ops->dsi.disable(in, false, false);
-	mdelay(10);
+	// mdelay(10);
 
 	gpiod_set_value_cansleep(ddata->cabc_gpio, 0);
 	gpiod_set_value_cansleep(ddata->enable_gpio, 0);
 
-	mdelay(20);
+	// mdelay(20);
 }
 
 static const struct of_device_id pdsivm_of_match[] = {
