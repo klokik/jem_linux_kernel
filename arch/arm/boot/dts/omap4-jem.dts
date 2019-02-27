@@ -44,9 +44,11 @@
 	gpio_keys {
 		compatible = "gpio-keys";
 
-// XXX: breaks emmc, check pinmux
-//		pinctrl-names = "default";
-//		pinctrl-0 = <&gpio_keys_pins>;
+		pinctrl-names = "default";
+		pinctrl-0 = <
+				&vol_up_key_pins
+				&vol_down_key_pins
+		>;
 
 		volume_up {
 			label = "volume-up";
@@ -176,6 +178,18 @@
 			0x14 (PIN_OUTPUT | MUX_MODE2)		/* fref_clk0_out.sys_drm_msecure */
 		>;
 	};
+
+	vol_up_key_pins: pinmux_vol_up_pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x42, PIN_INPUT_PULLUP | MUX_MODE3)	/* gpmc_wk1.gpio_wk1 */
+		>;
+	};
+
+	mpu6050_pins: pinmux_mpu6050_pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x48, PIN_INPUT | MUX_MODE3)	/* gpio_wk4.gpio_wk4 */
+		>;
+	};
 };
 
 &omap4_pmx_core {
@@ -188,7 +202,6 @@
 			/* &mcbsp2_pins */
 			/* &dss_hdmi_pins */
 			/* &tpd12s015_pins */
-			/* &gpio_keys_pins */
 			&backlight_pins
 			&nt71391_pins
 			// &bt_pins
@@ -196,17 +209,15 @@
 			/* &wm8962_pins */
 	>;
 
-	gpio_keys_pins: pinmux_gpio_keys_pins {
+	vol_down_key_pins: pinmux_vol_down_pins {
 		pinctrl-single,pins = <
-			0x00 (PIN_INPUT_PULLUP | MUX_MODE3)	/* gpmc_wk1.gpio_wk1 */
-			0x34 (PIN_INPUT_PULLUP | MUX_MODE3)	/* gpmc_ncs0.gpio_50 */
+			OMAP4_IOPAD(0x74, PIN_INPUT_PULLUP | MUX_MODE3)	/* gpmc_ncs0.gpio_50 */
 		>;
 	};
 
 	backlight_pins: pinmux_backlight_pins {
 		pinctrl-single,pins = <
 			0x190 (PIN_OUTPUT | MUX_MODE1)	/* dpm_emu18.dmtimer10_pwm_evt */
-			/*0x190 (PIN_OUTPUT | MUX_MODE3)*/
 			0x18a (PIN_OUTPUT | MUX_MODE3)	/* dpm_emu14.gpio_25 */
 		>;
 	};
@@ -417,6 +428,8 @@
 			// OMAP4_IOPAD(0x1a0, PIN_INPUT_PULLUP | MUX_MODE0)	/* sys_nirq2.sys_nirq2 */ // probably only used for twl6040...
 		>;
 	};
+
+
 };
 
 &i2c1 {
@@ -722,8 +735,24 @@
 	 * IMU
 	 */
 	mpu6050@68 {
-		compatible = "mpu6050";
+		compatible = "invensense,mpu6050";
 		reg = <0x68>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&mpu6050_pins>;
+
+		interrupt-parent = <&gpio1>;
+		interrupts = <4 IRQ_TYPE_EDGE_RISING>;
+
+		mount-matrix = "0",		/* x0 */
+									"-1",	/* y0 */
+									"0",		/* z0 */
+									"1",		/* x1 */
+									"0",		/* y1 */
+									"0",		/* z1 */
+									"0",		/* x2 */
+									"0",		/* y2 */
+									"1";		/* z2 */
 	};
 };
 
@@ -760,6 +789,8 @@
 };
 
 &mmc5 {
+	status = "disabled";
+
 	pinctrl-names = "default";
 	pinctrl-0 = <&brcmfmac_pins>;
 
