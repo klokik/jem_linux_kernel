@@ -812,7 +812,7 @@
 };
 
 &mmc5 {
-	status = "disabled";
+	status = "okay";
 
 	pinctrl-names = "default";
 	pinctrl-0 = <&brcmfmac_pins>;
