@@ -15,6 +15,8 @@
 #include <sound/soc-dai.h>
 #include <sound/soc.h>
 
+#include <../sound/soc/codecs/wm8962.h>
+
 struct simple_card_data {
 	struct snd_soc_card snd_card;
 	struct simple_dai_props {
@@ -114,15 +116,19 @@ static int asoc_simple_card_hw_params(struct snd_pcm_substream *substream,
 		if (ret < 0)
 			return ret;
 
-		ret = snd_soc_dai_set_sysclk(codec_dai, 0, mclk,
-					     SND_SOC_CLOCK_IN);
+		ret = snd_soc_dai_set_pll(codec_dai, WM8962_FLL, WM8962_FLL_MCLK,
+					  19200000, mclk);
+
+		ret = snd_soc_dai_set_sysclk(codec_dai, WM8962_SYSCLK_FLL,
+					     mclk, SND_SOC_CLOCK_IN);
 		if (ret && ret != -ENOTSUPP)
 			goto err;
 
 		ret = snd_soc_dai_set_sysclk(cpu_dai, 0, mclk,
 					     SND_SOC_CLOCK_OUT);
-		if (ret && ret != -ENOTSUPP)
-			goto err;
+		/* Do not error out if we fail */
+		// if (ret && ret != -ENOTSUPP)
+		// 	goto err;
 	}
 	return 0;
 err:
