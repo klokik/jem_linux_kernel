@@ -2845,11 +2845,11 @@ static int wm8962_set_fll(struct snd_soc_component *component, int fll_id, int s
 	/* Parameters good, disable so we can reprogram */
 	snd_soc_component_update_bits(component, WM8962_FLL_CONTROL_1, WM8962_FLL_ENA, 0);
 
-	switch (fll_id) {
+	switch (source) {
 	case WM8962_FLL_MCLK:
 	case WM8962_FLL_BCLK:
 	case WM8962_FLL_OSC:
-		fll1 |= (fll_id - 1) << WM8962_FLL_REFCLK_SRC_SHIFT;
+		fll1 |= (source - 1) << WM8962_FLL_REFCLK_SRC_SHIFT;
 		break;
 	case WM8962_FLL_INT:
 		snd_soc_component_update_bits(component, WM8962_FLL_CONTROL_1,
