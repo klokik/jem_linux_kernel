@@ -1,7 +1,5 @@
 /*
- *
  * Author: Mykola Dolhyi <0xb000@gmail.com>
- *
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -86,7 +84,7 @@
 		compatible = "rfkill-gpio";
 		rfkill-name = "bcm43239";
 		rfkill-type = "wlan";
-		shutdown-gpios = <&gpio2 11 GPIO_ACTIVE_HIGH>; 	// wlan_en
+		shutdown-gpios = <&gpio2 11 GPIO_ACTIVE_HIGH>;	/* wlan_en */
 	};
 
 	mmc5_pwrseq: wifi_pwrseq {
@@ -98,7 +96,7 @@
 		reset-gpios = <&gpio2 11 GPIO_ACTIVE_LOW>;
 	};
 
-	sound {
+	sound1 {
 		status = "disabled";
 
 		compatible = "ti,jem-audio";
@@ -109,7 +107,58 @@
 						"Headphone", "HPOUTR",
 						"Main Speaker", "SPKOUTL",
 						"Main Speaker", "SPKOUTR";
-		// clocks = <&auxclk0_ck>;
+	};
+
+	sound2 {
+		status = "okay";
+		compatible = "simple-audio-card";
+		simple-audio-card,name = "wm-sound";
+
+		simple-audio-card,format = "dsp_b";
+		simple-audio-card,bitclock-master = <&link0_codec>;
+		simple-audio-card,frame-master = <&link0_codec>;
+		simple-audio-card,mclk-fs = <512>;
+
+		simple-audio-card,hp-det-gpio = <&gpio6 11 GPIO_ACTIVE_LOW>;
+
+		simple-audio-card,widgets =
+			"Headphone", "Headphone Jack",
+			"Speaker", "Main Speaker";
+
+		simple-audio-card,routing =
+						"Headphone Jack", "HPOUTL",
+						"Headphone Jack", "HPOUTR",
+						"Main Speaker", "SPKOUTL",
+						"Main Speaker", "SPKOUTR";
+
+		link0_cpu: simple-audio-card,cpu {
+			sound-dai = <&mcbsp2>;
+		};
+
+		link0_codec: simple-audio-card,codec {
+			sound-dai = <&wm_codec>;
+		};
+	};
+
+	sound3 {
+		status = "disabled";
+
+		compatible = "audio-graph-card";
+		label = "wm-sound";
+
+		simple-graph-card,widgets =
+			"Speaker", "Main Speaker",
+			"Speaker", "Loudspeaker",
+			"Headphone", "Headphone Jack",
+			"Microphone", "Internal Mic";
+
+		simple-audio-card,routing =
+			"Headphone Jack", "HPOUTL",
+			"Headphone Jack", "HPOUTR",
+			"Main Speaker", "SPKOUTL",
+			"Main Speaker", "SPKOUTR";
+
+		// dais = <&cpu_port>;
 	};
 
 	/* backlight PWM */
@@ -188,11 +237,12 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <
 			&twl6030_wkup_pins
+			&fref_clk_pins
 	>;
 
 	twl6030_wkup_pins: pinmux_twl6030_wkup_pins {
 		pinctrl-single,pins = <
-			0x14 (PIN_OUTPUT | MUX_MODE2)		/* fref_clk0_out.sys_drm_msecure */
+			OMAP4_IOPAD(0x56, PIN_OUTPUT_PULLUP | MUX_MODE2)		/* fref_clk3_req.sys_drm_msecure */
 		>;
 	};
 
@@ -213,23 +263,24 @@
 			OMAP4_IOPAD(0x48, PIN_INPUT | MUX_MODE3)	/* gpio_wk4.gpio_wk4 */
 		>;
 	};
+
+	fref_clk_pins: pinmux_fref_clk_pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x54, PIN_OUTPUT | MUX_MODE0)		/* fref_clk0_out.fref_clk0_out */ // Unknown
+			OMAP4_IOPAD(0x58, PIN_OUTPUT | MUX_MODE0)		/* fref_clk3_out.fref_clk3_out */ // USB PHY clock
+		>;
+	};
 };
 
 &omap4_pmx_core {
 	pinctrl-names = "default";
 	pinctrl-0 = <
 			&twl6030_pins
-			&mcpdm_pins
 			&dmic_pins
-			/* &mcbsp1_pins */
-			/* &mcbsp2_pins */
-			/* &dss_hdmi_pins */
+			&dss_hdmi_pins
 			/* &tpd12s015_pins */
 			&backlight_pins
 			&nt71391_pins
-			// &bt_pins
-			/* &smb347_pins */
-			/* &wm8962_pins */
 	>;
 
 	vol_down_key_pins: pinmux_vol_down_pins {
@@ -296,16 +347,6 @@
 		>;
 	};
 
-	mcpdm_pins: pinmux_mcpdm_pins {
-		pinctrl-single,pins = <
-			0xc6 (PIN_INPUT_PULLDOWN | MUX_MODE0)	/* abe_pdm_ul_data.abe_pdm_ul_data */
-			0xc8 (PIN_INPUT_PULLDOWN | MUX_MODE0)	/* abe_pdm_dl_data.abe_pdm_dl_data */
-			0xca (PIN_INPUT_PULLUP | MUX_MODE0)	/* abe_pdm_frame.abe_pdm_frame */
-			0xcc (PIN_INPUT_PULLDOWN | MUX_MODE0)	/* abe_pdm_lb_clk.abe_pdm_lb_clk */
-			0xce (PIN_INPUT_PULLDOWN | MUX_MODE0)	/* abe_clks.abe_clks */
-		>;
-	};
-
 	dmic_pins: pinmux_dmic_pins {
 		pinctrl-single,pins = <
 			0xd0 (PIN_OUTPUT | MUX_MODE0)		/* abe_dmic_clk1.abe_dmic_clk1 */
@@ -315,21 +356,15 @@
 		>;
 	};
 
-	mcbsp1_pins: pinmux_mcbsp1_pins {
-		pinctrl-single,pins = <
-			0xbe (PIN_INPUT | MUX_MODE0)		/* abe_mcbsp1_clkx.abe_mcbsp1_clkx */
-			0xc0 (PIN_INPUT_PULLDOWN | MUX_MODE0)	/* abe_mcbsp1_dr.abe_mcbsp1_dr */
-			0xc2 (PIN_OUTPUT_PULLDOWN | MUX_MODE0)	/* abe_mcbsp1_dx.abe_mcbsp1_dx */
-			0xc4 (PIN_INPUT | MUX_MODE0)		/* abe_mcbsp1_fsx.abe_mcbsp1_fsx */
-		>;
-	};
-
 	mcbsp2_pins: pinmux_mcbsp2_pins {
 		pinctrl-single,pins = <
 			OMAP4_IOPAD(0xf6, PIN_INPUT | MUX_MODE0)		/* abe_mcbsp2_clkx.abe_mcbsp2_clkx */
 			OMAP4_IOPAD(0xf8, PIN_INPUT | MUX_MODE0)	/* abe_mcbsp2_dr.abe_mcbsp2_dr */
 			OMAP4_IOPAD(0xfa, PIN_OUTPUT | MUX_MODE0)	/* abe_mcbsp2_dx.abe_mcbsp2_dx */
 			OMAP4_IOPAD(0xfc, PIN_INPUT | MUX_MODE0)		/* abe_mcbsp2_fsx.abe_mcbsp2_fsx */
+
+			// OMAP4_IOPAD(0xf6, PIN_OUTPUT | MUX_MODE0)		/* abe_mcbsp2_clkx.abe_mcbsp2_clkx */
+			// OMAP4_IOPAD(0xfc, PIN_OUTPUT | MUX_MODE0)		/* abe_mcbsp2_fsx.abe_mcbsp2_fsx */
 		>;
 	};
 
@@ -350,21 +385,11 @@
 		>;
 	};
 
-	mcspi1_pins: pinmux_mcspi1_pins {
-		pinctrl-single,pins = <
-			0xf2 (PIN_INPUT | MUX_MODE0)		/*  mcspi1_clk.mcspi1_clk */
-			0xf4 (PIN_INPUT | MUX_MODE0)		/*  mcspi1_somi.mcspi1_somi */
-			0xf6 (PIN_INPUT | MUX_MODE0)		/*  mcspi1_simo.mcspi1_simo */
-			0xf8 (PIN_INPUT | MUX_MODE0)		/*  mcspi1_cs0.mcspi1_cs0 */
-			0xfa (PIN_INPUT | MUX_MODE0)		/*  mcspi1_cs1.mcspi1_cs1 */
-		>;
-	};
-
 	dss_hdmi_pins: pinmux_dss_hdmi_pins {
 		pinctrl-single,pins = <
 			OMAP4_IOPAD(0x9a, PIN_INPUT | MUX_MODE0)	/* hdmi_cec.hdmi_cec */
-			OMAP4_IOPAD(0x9c, PIN_INPUT | MUX_MODE0)	/* hdmi_scl.hdmi_scl */
-			OMAP4_IOPAD(0x9e, PIN_INPUT | MUX_MODE0)	/* hdmi_sda.hdmi_sda */
+			OMAP4_IOPAD(0x9c, PIN_INPUT_PULLUP | MUX_MODE0)	/* hdmi_scl.hdmi_scl */
+			OMAP4_IOPAD(0x9e, PIN_INPUT_PULLUP | MUX_MODE0)	/* hdmi_sda.hdmi_sda */
 			OMAP4_IOPAD(0x8e, PIN_INPUT_PULLDOWN | MUX_MODE3) /* gpmc_wait2.gpio_100 WTF??? */
 		>;
 	};
@@ -448,7 +473,10 @@
 		pinctrl-single,pins = <
 			OMAP4_IOPAD(0x1cc, PIN_INPUT_PULLDOWN | MUX_MODE3)	/* dpm_emu15.gpio_26 */
 			OMAP4_IOPAD(0x17c, PIN_INPUT_PULLUP | MUX_MODE3)	/* kpd_col4.gpio_171 */
-			// OMAP4_IOPAD(0x1a0, PIN_INPUT_PULLUP | MUX_MODE0)	/* sys_nirq2.sys_nirq2 */ // probably only used for twl6040...
+			// OMAP4_IOPAD(0x1a0, PIN_INPUT_PULLUP | MUX_MODE0)	/* sys_nirq2.sys_nirq2 probably only used for twl6040... to wake cpu up */
+
+			/* codec mclk - auxclk0_ck out */
+			OMAP4_IOPAD(0x19a, PIN_OUTPUT | MUX_MODE0)		/* fref_clk1_out.fref_clk1_out */
 		>;
 	};
 
@@ -464,6 +492,13 @@
 
 	twl: twl@48 {
 		reg = <0x48>;
+
+		// pinctrl-names = "default";
+		// pinctrl-0 = <
+		// 	&twl6030_pins
+		// 	&twl6030_wkup_pins
+		// >;
+
 		/* SPI = 0, IRQ# = 7, 4 = active high level-sensitive */
 		interrupts = <GIC_SPI 7 IRQ_TYPE_LEVEL_HIGH>; /* IRQ_SYS_1N cascaded to gic */
 		interrupt-parent = <&gic>;
@@ -471,7 +506,6 @@
 };
 
 #include "twl6030.dtsi"
-/* #include "twl6030_omap4.dtsi" */
 
 &twl {
 	compatible = "ti,twl6032";
@@ -481,6 +515,7 @@
 		interrupts = <0>;
 	};
 
+	/* wifi */
 	vaux1: regulator-vaux1 {
 		compatible = "ti,twl6032-ldo2";
 		regulator-min-microvolt = <1000000>;
@@ -488,24 +523,31 @@
 		// regulator-always-on;
 	};
 
-	ldo6: regulator-ldo6 {
+	/* DSS, DSI what? panel? controller? */
+	vcxio: regulator-vcxio {
 		compatible = "ti,twl6032-ldo6";
 		regulator-min-microvolt = <1800000>;
 		regulator-max-microvolt = <1800000>;
 	};
 
+	/* mmc and backlight? and wifi?*/
 	vmmc: regulator-vmmc {
 		compatible = "ti,twl6032-ldo5";
 		regulator-min-microvolt = <1200000>;
 		regulator-max-microvolt = <3000000>;
 	};
 
+	/* ???? Supposed to be for OTG, seems to be not used */
 	vusb: regulator-vusb {
 		compatible = "ti,twl6032-ldousb";
 		regulator-min-microvolt = <3300000>;
 		regulator-max-microvolt = <3300000>;
+		// regulator-always-on;
+
+		status = "disabled";
 	};
 
+	/* presumably wm8962 */
 	vaux2: regulator-vaux2 {
 		compatible = "ti,twl6032-ldo4";
 		regulator-min-microvolt = <1200000>;
@@ -513,20 +555,50 @@
 		// regulator-always-on;
 	};
 
+	/* smb347 */
 	vusim: regulator-vusim {
 		compatible = "ti,twl6032-ldo7";
 		regulator-min-microvolt = <1200000>;
 		regulator-max-microvolt = <2900000>;
 	};
 
+	/* ???? */
 	clk32kg: regulator-clk32kg {
 		compatible = "ti,twl6030-clk32kg";
 		regulator-always-on;
 	};
 
+	/* Bluetooth clock */
 	clk32kaudio: regulator-clk32kaudio {
 		compatible = "ti,twl6030-clk32kaudio";
 	};
+
+	/* HDMI vref */
+	vdac: regulator-vdac {
+		compatible = "ti,twl6032-ldoln";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+	};
+
+	/* ???? */
+	vana: regulator-vana {
+		compatible = "ti,twl6030-vana";
+		regulator-always-on;
+	};
+
+	/*
+	vaux1 - ldo2 - Wi-Fi, or not....
+	vaux2 - ldo4 - wm8962, definitely not, not enabled on stock
+	vaux3 - ldo3 - Cam2!
+	 vmmc - ldo5 - nope, disabled
+	  vpp - ldo1 ??? disabled
+	 vana - ???
+	vcxio - ldo6 - dss,dsi
+	 vdac - ldoln - hdmi-vref!
+	 vusb - ldousb ???
+	vusim - ldo7 - smb347
+	clk32kg - clk32kg ??? not used?
+	*/
 };
 
 /* &twl {
@@ -544,12 +616,6 @@
 		regulator-min-microvolt = <1000000>;
 		regulator-max-microvolt = <3000000>;
 		regulator-always-on;
-	};
-
-	vaux2: regulator-vaux2 {
-		compatible = "ti,twl6032-ldo4";
-		regulator-min-microvolt = <1200000>;
-		regulator-max-microvolt = <2800000>;
 	};
 
 	vaux3: regulator-vaux3 {
@@ -723,21 +789,22 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&wm8962_pins>;
 
-		// interrupts = <26 IRQ_TYPE_EDGE_RISING>;	/* gpio_26 */
+		/* IRQ is not working properly for some reason */
+		// interrupts = <26 IRQ_TYPE_LEVEL_HIGH>;
 		// interrupt-parent = <&gpio1>;
 
 		clocks = <&auxclk0_ck>;
 		clock-names = "main_clk";
 		clock-frequency = <19200000>;
 
-		DCVDD-supply = <&vaux2>;
-		DBVDD-supply = <&vaux2>;
-		AVDD-supply = <&vaux2>;
-		CPVDD-supply = <&vaux2>;
-		MICVDD-supply = <&vaux2>;
-		PLLVDD-supply = <&vaux2>;
-		SPKVDD1-supply = <&vaux2>;
-		SPKVDD2-supply = <&vaux2>;
+		// DCVDD-supply = <&vaux2>;
+		// DBVDD-supply = <&vaux2>;
+		// AVDD-supply = <&vaux2>;
+		// CPVDD-supply = <&vaux2>;
+		// MICVDD-supply = <&vaux2>;
+		// PLLVDD-supply = <&vaux2>;
+		// SPKVDD1-supply = <&vaux2>;
+		// SPKVDD2-supply = <&vaux2>;
 
 		gpio-cfg = <
 			0x0000 /* 0:Default */
@@ -747,6 +814,18 @@
 			0x8014 /* 4:FN_DMICCDAT */
 			0x0013 /* 5:FN_DMICCLK */
 		>;
+
+		mic-cfg = <1>;
+
+		// codec_port: port {
+		// 	codec_endpoint: endpoint {
+		// 		remote-endpoint = <&cpu_endpoint>;
+		// 		clocks = <&auxclk0_ck>;
+		// 		// clock-names = "main_clk";
+		// 		clock-frequency = <19200000>;
+		// 		// clocks = <&audio_mclk>;
+		// 	};
+		// };
 	};
 };
 
@@ -754,9 +833,7 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c4_pins>;
 	clock-frequency = <400000>;
-	/*
-	 * IMU
-	 */
+
 	mpu6050@68 {
 		compatible = "invensense,mpu6050";
 		reg = <0x68>;
@@ -777,11 +854,6 @@
 									"0",		/* y2 */
 									"1";		/* z2 */
 	};
-};
-
-&mcspi1 {
-	pinctrl-names = "default";
-	pinctrl-0 = <&mcspi1_pins>;
 };
 
 &mmc1 {
@@ -812,7 +884,7 @@
 };
 
 &mmc5 {
-	status = "okay";
+	status = "disabled";
 
 	pinctrl-names = "default";
 	pinctrl-0 = <&brcmfmac_pins>;
@@ -889,20 +961,26 @@
 							&omap4_pmx_core OMAP4_UART4_RX>;
 };
 
-&mcbsp1 {
-	pinctrl-names = "default";
-	pinctrl-0 = <&mcbsp1_pins>;
-	status = "disabled";
-};
-
 &mcbsp2 {
 	#sound-dai-cells = <0>;
 	pinctrl-names = "default";
 	pinctrl-0 = <&mcbsp2_pins>;
 	status = "okay";
+
+	// cpu_port: port {
+	// 	cpu_endpoint: endpoint {
+	// 		dai-format = "i2s";
+	// 		remote-endpoint = <&codec_endpoint>;
+
+	// 		frame-master = <&codec_port>;
+	// 		bitclock-master = <&codec_port>;
+	// 		clocks = <&auxclk0_ck>;
+	// 	};
+	// };
 };
 
 &mcbsp3 {
+	// To be used for Bluetooth
 	status = "disabled";
 };
 
@@ -913,7 +991,6 @@
 };
 
 &twl_usb_comparator {
-	/*usb-supply = <&ldousb>;*/
 	usb-supply = <&vusb>;
 };
 
@@ -932,7 +1009,7 @@
 
 &dsi1 {
 	status = "ok";
-	vdd-supply = <&ldo6>;
+	vdd-supply = <&vcxio>;
 
 	port {
 		dsi1_out_ep: endpoint {
@@ -968,8 +1045,8 @@
 	status = "ok";
 	vdda-supply = <&vdac>;
 
-	pinctrl-names = "dafault";
-	pinctrl-0 = <&dss_hdmi_pins>;
+	// pinctrl-names = "dafault";
+	// pinctrl-0 = <&dss_hdmi_pins>;
 
 	port {
 		hdmi_out: endpoint {
@@ -979,6 +1056,10 @@
 };
 
 &bb2d {
+	status = "okay";
+};
+
+&sgx {
 	status = "okay";
 };
 
