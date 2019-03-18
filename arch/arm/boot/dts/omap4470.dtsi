@@ -1,27 +1,28 @@
 /*
- * Device Tree Source for OMAP4460 SoC
- *
- * Copyright (C) 2012 Texas Instruments Incorporated - http://www.ti.com/
+ * Device Tree Source for OMAP4470 SoC
  *
  * This file is licensed under the terms of the GNU General Public License
  * version 2.  This program is licensed "as is" without any warranty of any
  * kind, whether express or implied.
  */
+
 #include "omap4460.dtsi"
 
 / {
 	ocp {
-/*		sgx:sgx@56000000 {
+		sgx: sgx@56000000 {
 			compatible = "omap_gpu", "ti,omap4-gpu", "ti,dra7-sgx544", "img,sgx544";
-			reg = <0x5600fe00 0x200>;
-			reg-names = "gpu_wrapper";
+			reg = <0x56000000 0x10000>;
+			reg-names = "sgx_ocp_base";
 			interrupts = <GIC_SPI 21 IRQ_TYPE_LEVEL_HIGH>;
 			ti,hwmods = "gpu";
-			clocks = <&l3_div_ck>, <&sgx_clk_mux>;
-			clock-names = "sgx_clk_mux";
+			// clocks = <&l3_div_ck>, <&sgx_clk_mux>;
+			// clock-names = "sgx_clk_mux";
+			// clock-names = "gpu_iclk", "gpu_fclk";
+			clocks = <&sgx_clk_mux>;
+			clock-names = "sgx_fclk";
 			status = "disabled";
 		};
-*/
 
 		bb2d: bb2d@59000000 {
 			compatible = "vivante,gc";

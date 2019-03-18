@@ -788,6 +788,18 @@
 		ti,bit-shift = <8>;
 		reg = <0x0640>;
 	};
+
+	/*
+	 * OMAP4470 uses direct DPLL_PER see 4460-4470 delta
+	 * TODO: check clocks
+	 */
+	sgx_clk_mux: sgx_clk_mux@1220 {
+		#clock-cells = <0>;
+		compatible = "ti,mux-clock";
+		clocks = <&dpll_core_m7x2_ck>, <&dpll_per_m7x2_ck>;
+		ti,bit-shift = <24>;
+		reg = <0x1220>;
+	};
 };
 
 &cm2_clockdomains {
