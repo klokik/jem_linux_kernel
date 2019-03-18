@@ -140,27 +140,6 @@
 		};
 	};
 
-	sound3 {
-		status = "disabled";
-
-		compatible = "audio-graph-card";
-		label = "wm-sound";
-
-		simple-graph-card,widgets =
-			"Speaker", "Main Speaker",
-			"Speaker", "Loudspeaker",
-			"Headphone", "Headphone Jack",
-			"Microphone", "Internal Mic";
-
-		simple-audio-card,routing =
-			"Headphone Jack", "HPOUTL",
-			"Headphone Jack", "HPOUTR",
-			"Main Speaker", "SPKOUTL",
-			"Main Speaker", "SPKOUTR";
-
-		// dais = <&cpu_port>;
-	};
-
 	/* backlight PWM */
 	pwm10: dmtimer-pwm@10 {
 		status = "okay";
@@ -362,9 +341,6 @@
 			OMAP4_IOPAD(0xf8, PIN_INPUT | MUX_MODE0)	/* abe_mcbsp2_dr.abe_mcbsp2_dr */
 			OMAP4_IOPAD(0xfa, PIN_OUTPUT | MUX_MODE0)	/* abe_mcbsp2_dx.abe_mcbsp2_dx */
 			OMAP4_IOPAD(0xfc, PIN_INPUT | MUX_MODE0)		/* abe_mcbsp2_fsx.abe_mcbsp2_fsx */
-
-			// OMAP4_IOPAD(0xf6, PIN_OUTPUT | MUX_MODE0)		/* abe_mcbsp2_clkx.abe_mcbsp2_clkx */
-			// OMAP4_IOPAD(0xfc, PIN_OUTPUT | MUX_MODE0)		/* abe_mcbsp2_fsx.abe_mcbsp2_fsx */
 		>;
 	};
 
@@ -797,15 +773,6 @@
 		clock-names = "main_clk";
 		clock-frequency = <19200000>;
 
-		// DCVDD-supply = <&vaux2>;
-		// DBVDD-supply = <&vaux2>;
-		// AVDD-supply = <&vaux2>;
-		// CPVDD-supply = <&vaux2>;
-		// MICVDD-supply = <&vaux2>;
-		// PLLVDD-supply = <&vaux2>;
-		// SPKVDD1-supply = <&vaux2>;
-		// SPKVDD2-supply = <&vaux2>;
-
 		gpio-cfg = <
 			0x0000 /* 0:Default */
 			0x0003 /* 1:FN_IRQ */
@@ -816,16 +783,6 @@
 		>;
 
 		mic-cfg = <1>;
-
-		// codec_port: port {
-		// 	codec_endpoint: endpoint {
-		// 		remote-endpoint = <&cpu_endpoint>;
-		// 		clocks = <&auxclk0_ck>;
-		// 		// clock-names = "main_clk";
-		// 		clock-frequency = <19200000>;
-		// 		// clocks = <&audio_mclk>;
-		// 	};
-		// };
 	};
 };
 
@@ -966,17 +923,6 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&mcbsp2_pins>;
 	status = "okay";
-
-	// cpu_port: port {
-	// 	cpu_endpoint: endpoint {
-	// 		dai-format = "i2s";
-	// 		remote-endpoint = <&codec_endpoint>;
-
-	// 		frame-master = <&codec_port>;
-	// 		bitclock-master = <&codec_port>;
-	// 		clocks = <&auxclk0_ck>;
-	// 	};
-	// };
 };
 
 &mcbsp3 {
