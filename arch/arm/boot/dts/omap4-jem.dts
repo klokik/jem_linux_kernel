@@ -271,28 +271,28 @@
 
 	backlight_pins: pinmux_backlight_pins {
 		pinctrl-single,pins = <
-			0x190 (PIN_OUTPUT | MUX_MODE1)	/* dpm_emu18.dmtimer10_pwm_evt */
-			0x18a (PIN_OUTPUT | MUX_MODE3)	/* dpm_emu14.gpio_25 */
+			OMAP4_IOPAD(0x1d0, PIN_OUTPUT | MUX_MODE1)	/* dpm_emu18.dmtimer10_pwm_evt */
+			OMAP4_IOPAD(0x1ca, PIN_OUTPUT | MUX_MODE3)	/* dpm_emu14.gpio_25 */
 		>;
 	};
 
 	nt71391_pins: pinmux_nt71391_pins {
 		pinctrl-single,pins = <
-			0x14 (PIN_OUTPUT | MUX_MODE3)	/* gpmc_ad11.gpio_35 */
-			0x1a (PIN_OUTPUT | MUX_MODE3)	/* gpmc_ad13.gpio_37 */
+			OMAP4_IOPAD(0x54, PIN_OUTPUT | MUX_MODE3)	/* gpmc_ad11.gpio_35 */
+			OMAP4_IOPAD(0x5a, PIN_OUTPUT | MUX_MODE3)	/* gpmc_ad13.gpio_37 */
 		>;
 	};
 
 	smb347_pins: pinmux_smb347_pins {
 		pinctrl-single,pins = <
-			0x150 (PIN_INPUT | MUX_MODE3)	/* kpd_row1.gpio_2 */
+			OMAP4_IOPAD(0x190, PIN_INPUT | MUX_MODE3)	/* kpd_row1.gpio_2 */
 		>;
 	};
 
 	cyttsp4_pins: pinmux_cyttsp4_pins {
 		pinctrl-single,pins = <
-			0x186 (PIN_OUTPUT | MUX_MODE3)  /* dpm_emu12.gpio_23 */
-			0x188 (PIN_INPUT_PULLUP | MUX_MODE3)    /* dpm_emu13.gpio_24 */
+			OMAP4_IOPAD(0x1c6, PIN_OUTPUT | MUX_MODE3)	/* dpm_emu12.gpio_23 */
+			OMAP4_IOPAD(0x1c8, PIN_INPUT_PULLUP | MUX_MODE3)/* dpm_emu13.gpio_24 */
 		>;
 	};
 
@@ -323,7 +323,7 @@
 
 	twl6030_pins: pinmux_twl6030_pins {
 		pinctrl-single,pins = <
-			0x15e (WAKEUP_EN | PIN_INPUT_PULLUP | MUX_MODE0)	/* sys_nirq1.sys_nirq1 */
+			OMAP4_IOPAD(0x19e, WAKEUP_EN | PIN_INPUT_PULLUP | MUX_MODE0)	/* sys_nirq1.sys_nirq1 */
 		>;
 	};
 
@@ -338,10 +338,10 @@
 
 	mcbsp2_pins: pinmux_mcbsp2_pins {
 		pinctrl-single,pins = <
-			OMAP4_IOPAD(0xf6, PIN_INPUT | MUX_MODE0)		/* abe_mcbsp2_clkx.abe_mcbsp2_clkx */
+			OMAP4_IOPAD(0xf6, PIN_INPUT | MUX_MODE0)	/* abe_mcbsp2_clkx.abe_mcbsp2_clkx */
 			OMAP4_IOPAD(0xf8, PIN_INPUT | MUX_MODE0)	/* abe_mcbsp2_dr.abe_mcbsp2_dr */
 			OMAP4_IOPAD(0xfa, PIN_OUTPUT | MUX_MODE0)	/* abe_mcbsp2_dx.abe_mcbsp2_dx */
-			OMAP4_IOPAD(0xfc, PIN_INPUT | MUX_MODE0)		/* abe_mcbsp2_fsx.abe_mcbsp2_fsx */
+			OMAP4_IOPAD(0xfc, PIN_INPUT | MUX_MODE0)	/* abe_mcbsp2_fsx.abe_mcbsp2_fsx */
 		>;
 	};
 
@@ -374,9 +374,9 @@
 	tpd12s015_pins: pinmux_tpd12s015_pins {
 		pinctrl-single,pins = <
 			/* LS_OE, CT_CP_HPD - high to enable dcdc*/
-			0x22 (PIN_OUTPUT | MUX_MODE3)		/* gpmc_a17.gpio_41 */
-			0x48 (PIN_OUTPUT | MUX_MODE3)		/* gpmc_nbe1.gpio_60 */
-			0x58 (PIN_INPUT_PULLDOWN | MUX_MODE3)	/* hdmi_hpd.gpio_63 */
+			OMAP4_IOPAD(0x62, PIN_OUTPUT | MUX_MODE3)		/* gpmc_a17.gpio_41 */
+			OMAP4_IOPAD(0x88, PIN_OUTPUT | MUX_MODE3)		/* gpmc_nbe1.gpio_60 */
+			OMAP4_IOPAD(0x98, PIN_INPUT_PULLDOWN | MUX_MODE3)	/* hdmi_hpd.gpio_63 */
 		>;
 	};
 
