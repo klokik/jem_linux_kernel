@@ -976,6 +976,10 @@ static const struct usb_device_id products[] = {
 					      0xff),
 		.driver_info	    = (unsigned long)&qmi_wwan_info_quirk_dtr,
 	},
+	{	/* Kindle Fire HD 8.9 LTE Module (Folksy 3rn13) */
+		USB_DEVICE_AND_INTERFACE_INFO(0x1949, 0x9003, USB_CLASS_VENDOR_SPEC, 6, 0),
+		.driver_info = (unsigned long)&qmi_wwan_info,
+	},
 
 	/* 3. Combined interface devices matching on interface number */
 	{QMI_FIXED_INTF(0x0408, 0xea42, 4)},	/* Yota / Megafon M100-1 */

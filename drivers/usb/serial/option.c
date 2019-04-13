@@ -552,6 +552,9 @@ static void option_instat_callback(struct urb *urb);
 #define WETELECOM_PRODUCT_6802			0x6802
 #define WETELECOM_PRODUCT_WMD300		0x6803
 
+/* Amazon Lab126 products */
+#define LAB126_VENDOR_ID			0x1949
+#define LAB126_PRODUCT_ERNIE			0x9003
 
 /* Device flags */
 
@@ -1959,6 +1962,8 @@ static const struct usb_device_id option_ids[] = {
 	  .driver_info = RSVD(4) | RSVD(5) },
 	{ USB_DEVICE_INTERFACE_CLASS(0x2cb7, 0x0105, 0xff),			/* Fibocom NL678 series */
 	  .driver_info = RSVD(6) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(LAB126_VENDOR_ID, LAB126_PRODUCT_ERNIE, 0xff, 0x0b, 0x00) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(LAB126_VENDOR_ID, LAB126_PRODUCT_ERNIE, 0xff, 0x02, 0x01) },
 	{ } /* Terminating entry */
 };
 MODULE_DEVICE_TABLE(usb, option_ids);
