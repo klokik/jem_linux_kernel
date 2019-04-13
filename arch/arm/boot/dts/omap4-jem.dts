@@ -211,6 +211,64 @@
 			};
 		};
 	};
+
+	hsusb2_power: hsusb2_power_reg {
+		compatible = "regulator-fixed";
+		regulator-name = "hsusb2_vbus";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		gpio = <&gpio1 15 GPIO_ACTIVE_LOW>;	/* usb_resume gpio_15 */
+		startup-delay-us = <70000>;
+		enable-active-high;
+
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
+	hsusb2_phy: usb-phy@2 {
+		compatible = "usb-nop-xceiv";
+		reset-gpios = <&gpio2 30 GPIO_ACTIVE_LOW>;   /* gpio_62 */
+		#phy-cells = <0>;
+		vcc-supply = <&hsusb2_power>;
+		clocks = <&auxclk3_ck>;
+		clock-names = "main_clk";
+		clock-frequency = <19200000>;
+	};
+
+
+	modem_power: modem_power_reg {
+		compatible = "regulator-fixed";
+		regulator-name = "modem_vbus_power";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		gpios = <&gpio2 29 GPIO_ACTIVE_HIGH>;    /* wan_bost_en gpio_61 */
+		startup-delay-us = <100000>;
+		enable-active-high;
+
+		// regulator-always-on;
+	};
+
+	modem_en: modem {
+		compatible = "folksy,3rn13-power";
+		pinctrl-names = "default";
+		pinctrl-0 = <&modem_pins>;
+
+		feedback-gpios		= <&gpio1 16 GPIO_ACTIVE_HIGH>;
+		sim-present-gpios	= <&gpio1 17 GPIO_ACTIVE_HIGH>;
+		on-off-gpios		= <&gpio1 18 GPIO_ACTIVE_LOW>;
+		reset-gpios		= <&gpio1 19 GPIO_ACTIVE_LOW>;
+		usb-en-gpios		= <&gpio1 20 GPIO_ACTIVE_HIGH>;
+
+		// interrupts...
+		// host-wake-gpio = <&gpio1 3 GPIO_ACTIVE_HIGH>;
+		interrupts = <3 IRQ_TYPE_EDGE_RISING>;	/* gpio_3 trigger_rising */
+		interrupt-parent = <&gpio1>;
+
+		modem-supply = <&modem_power>;
+		/* VBUS supply should probably be controlled through the USB PHY driver for the modem port */
+		usb-port = <&hsusb2_phy>;       /* USB phy where we can check the modem status */
+		// vbus-supply = <&modem_vbus_hdmi_power>;
+	};
 };
 
 &omap4_pmx_wkup {
@@ -455,7 +513,20 @@
 		>;
 	};
 
+	modem_pins: pinmux_modem_pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x192, PIN_INPUT_PULLDOWN | MUX_MODE3)	/* kpd_row2.gpio_3 host_wake */
+			OMAP4_IOPAD(0x1b6, PIN_OUTPUT_PULLDOWN | MUX_MODE3)	/* dpm_emu4.gpio_15 usb_resume/host_hmi phy? */
+			OMAP4_IOPAD(0x1b8, PIN_INPUT_PULLDOWN | MUX_MODE3)	/* dpm_emu5.gpio_16 fw_ready */
+			OMAP4_IOPAD(0x1ba, PIN_INPUT | MUX_MODE3)		/* dpm_emu6.gpio_17 sim_present */
+			OMAP4_IOPAD(0x1bc, PIN_OUTPUT | MUX_MODE3)		/* dpm_emu7.gpio_18 wan_on_off */
+			OMAP4_IOPAD(0x1be, PIN_OUTPUT_PULLUP | MUX_MODE3)	/* dpm_emu8.gpio_19 resetin_n */
+			OMAP4_IOPAD(0x1c0, PIN_OUTPUT_PULLDOWN | MUX_MODE3)	/* dpm_emu9.gpio_20 usb_enable */
 
+			OMAP4_IOPAD(0x8a, PIN_OUTPUT_PULLDOWN | MUX_MODE3)	/* gpmc_wait0.gpio_61 boost_en */
+			OMAP4_IOPAD(0x8c, PIN_OUTPUT_PULLUP | MUX_MODE3)	/* gpmc_wait1.gpio_62 usb_phy_nreset */
+		>;
+	};
 };
 
 &i2c1 {
@@ -929,6 +1000,14 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&dmic_pins>;
 	status = "okay";
+};
+
+&usbhsehci {
+	phys = <&hsusb2_phy>;
+};
+
+&usbhshost {
+	port2-mode = "ehci-phy";
 };
 
 &twl_usb_comparator {
