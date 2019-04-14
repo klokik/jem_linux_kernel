@@ -12,45 +12,43 @@
 #include <asm/mach-types.h>
 #include <linux/platform_data/asoc-ti-mcbsp.h>
 
-// #include "mcbsp.h"
-// #include "omap-mcbsp-priv.h"
 #include "omap-mcbsp.h"
 
 #include "../codecs/wm8962.h"
 
-#define SAMPLE_RATE		48000
-#define SYSCLK_RATE 	(512*SAMPLE_RATE)
-#define MCLK_RATE		19200000
 
-struct jem_wm8962_data {
-	// struct snd_soc_dai_link dai;
-	// struct snd_soc_card card;
+#define MCLK_FS		512
+#define MCLK_RATE	19200000
+
+
+struct jem_card_data {
 	struct clk *mclk;
-	unsigned int mclk_rate; // 192...
+	unsigned int mclk_rate;
+	unsigned int sysclk_rate;
 };
 
-static int jem_hw_params(struct snd_pcm_substream *substream,
+static int ti_wm8962_hw_params(struct snd_pcm_substream *substream,
 	struct snd_pcm_hw_params *params)
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct jem_card_data *priv = snd_soc_card_get_drvdata(rtd->card);
 	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
 	struct snd_soc_dai *codec_dai = rtd->codec_dai;
-	struct omap_mcbsp *mcbsp = snd_soc_dai_get_drvdata(cpu_dai);
 	int ret;
 
 	dev_dbg(codec_dai->dev, "%s() - enter\n", __func__);
 
-	// ret = snd_soc_dai_set_pll(codec_dai, WM8962_FLL, WM8962_FLL_INT,
-	ret = snd_soc_dai_set_pll(codec_dai, WM8962_FLL, WM8962_FLL_MCLK,
-				MCLK_RATE, SYSCLK_RATE);
+	priv->sysclk_rate = params_rate(params) * MCLK_FS;
+
+	ret = snd_soc_dai_set_pll(codec_dai, WM8962_FLL, WM8962_FLL_MCLK, // WM8962_FLL_INT,
+				  priv->mclk_rate, priv->sysclk_rate);
 	if (ret < 0) {
 		dev_err(codec_dai->dev, "Failed to start CODEC FLL: %d\n", ret);
 		return ret;
 	}
 
 	ret = snd_soc_dai_set_sysclk(codec_dai, WM8962_SYSCLK_FLL,
-	// ret = snd_soc_dai_set_sysclk(codec_dai, WM8962_SYSCLK_MCLK,
-				SYSCLK_RATE, SND_SOC_CLOCK_IN);
+				     priv->sysclk_rate, SND_SOC_CLOCK_IN);
 	if (ret < 0) {
 		dev_err(codec_dai->dev, "Failed to set CODEC SYSCLK: %d\n", ret);
 		return ret;
@@ -63,115 +61,100 @@ static int jem_hw_params(struct snd_pcm_substream *substream,
 	// 	return ret;
 	// }
 
-	ret = snd_soc_dai_set_fmt(codec_dai, SND_SOC_DAIFMT_DSP_B |
-				SND_SOC_DAIFMT_CBM_CFM |
-				SND_SOC_DAIFMT_NB_NF);
-	if (ret < 0) {
-		dev_err(codec_dai->dev, "Failed to set CODEC DAI format: %d\n",	ret);
-		return ret;
-	}
+	// ret = snd_soc_dai_set_fmt(codec_dai, SND_SOC_DAIFMT_DSP_B |
+	// 			SND_SOC_DAIFMT_CBM_CFM |
+	// 			SND_SOC_DAIFMT_NB_NF);
+	// if (ret < 0) {
+	// 	dev_err(codec_dai->dev, "Failed to set CODEC DAI format: %d\n",	ret);
+	// 	return ret;
+	// }
 
-	ret = snd_soc_dai_set_fmt(cpu_dai, SND_SOC_DAIFMT_DSP_B |
-				SND_SOC_DAIFMT_CBM_CFM |
-				SND_SOC_DAIFMT_NB_NF);
-	if (ret < 0) {
-		dev_err(cpu_dai->dev, "Failed to set CPU DAI format: %d\n", ret);
-		return ret;
-	}
+	// ret = snd_soc_dai_set_fmt(cpu_dai, SND_SOC_DAIFMT_DSP_B |
+	// 			SND_SOC_DAIFMT_CBM_CFM |
+	// 			SND_SOC_DAIFMT_NB_NF);
+	// if (ret < 0) {
+	// 	dev_err(cpu_dai->dev, "Failed to set CPU DAI format: %d\n", ret);
+	// 	return ret;
+	// }
 
-	/* Might already be handled in mcbsp hw_params... */
-	// omap_mcbsp_set_tx_threshold(mcbsp, params_channels(params));
-	// omap_mcbsp_set_threshold(mcbsp, params_channels(params)); //replace
-	// with this
-
-	dev_dbg(codec_dai->dev, "%s() - exit\n", __func__);
 	return ret;
 }
 
 static struct snd_soc_ops jem_ops = {
-	.hw_params = jem_hw_params,
+	.hw_params = ti_wm8962_hw_params,
 };
 
-static int wm8962_set_bias_level(struct snd_soc_card *card,
+static int ti_wm8962_set_bias_level(struct snd_soc_card *card,
 	struct snd_soc_dapm_context *dapm,
 	enum snd_soc_bias_level level)
 {
-	// struct jem_wm8962_data *priv =	snd_soc_card_get_drvdata(card);
+	struct jem_card_data *priv = snd_soc_card_get_drvdata(card);
 	struct snd_soc_pcm_runtime *rtd = snd_soc_get_pcm_runtime(card, card->dai_link[0].name);
 	struct snd_soc_dai *codec_dai = rtd->codec_dai;
 	int ret;
 
 	if (dapm->dev != codec_dai->dev) {
-		dev_dbg(dapm->dev, "dapm->dev!=codec_dai->dev\n");
+		// dev_dbg(dapm->dev, "dapm->dev!=codec_dai->dev\n");
 		return 0;
 	}
 
 	dev_dbg(codec_dai->dev, "%s() - enter\n", __func__);
 
 	switch (level) {
-	case SND_SOC_BIAS_STANDBY:
-		dev_dbg(codec_dai->dev, "setting bias STANDBY\n");
-		// if (dapm->bias_level == SND_SOC_BIAS_OFF) {
-		// 	dev_dbg(codec_dai->dev, "Enable MCLK\n");
-		// 	ret = clk_prepare_enable(priv->mclk_dev);
-		// 	if (ret < 0) {
-		// 		dev_err(codec_dai->dev, "Failed to enable MCLK: %d\n", ret);
-		// 		return ret;
-		// 	}
-		// }
-		break;
-
 	case SND_SOC_BIAS_PREPARE:
 		dev_dbg(codec_dai->dev, "setting bias PREPARE\n");
-		if (dapm->bias_level == SND_SOC_BIAS_STANDBY) {
-			dev_dbg(codec_dai->dev, "Starting FLL\n");
-			// ret = snd_soc_dai_set_pll(codec_dai, WM8962_FLL, WM8962_FLL_INT,
-			ret = snd_soc_dai_set_pll(codec_dai, WM8962_FLL, WM8962_FLL_MCLK,
-						MCLK_RATE, SYSCLK_RATE);
-			if (ret < 0) {
-				pr_err("Failed to start FLL: %d\n", ret);
-				return ret;
-			}
+		if (dapm->bias_level != SND_SOC_BIAS_STANDBY)
+			break;
 
-			dev_dbg(codec_dai->dev, "Setting SYSCLK\n");
-			// ret = snd_soc_dai_set_sysclk(codec_dai, WM8962_SYSCLK_FLL,
-			ret = snd_soc_dai_set_sysclk(codec_dai, WM8962_SYSCLK_MCLK,
-						SYSCLK_RATE, SND_SOC_CLOCK_IN);
-			if (ret < 0) {
-				pr_err("Failed to set SYSCLK: %d\n", ret);
-				return ret;
-			}
+		dev_dbg(codec_dai->dev, "Starting FLL\n");
+		ret = snd_soc_dai_set_pll(codec_dai, WM8962_FLL, WM8962_FLL_MCLK, // WM8962_FLL_INT,
+					priv->mclk_rate, priv->sysclk_rate);
+		if (ret < 0) {
+			pr_err("Failed to start FLL: %d\n", ret);
+			return ret;
+		}
+
+		dev_dbg(codec_dai->dev, "Setting SYSCLK\n");
+		ret = snd_soc_dai_set_sysclk(codec_dai, WM8962_SYSCLK_FLL,
+					priv->sysclk_rate, SND_SOC_CLOCK_IN);
+		if (ret < 0) {
+			pr_err("Failed to set SYSCLK: %d\n", ret);
+			return ret;
 		}
 		break;
 
-	case SND_SOC_BIAS_ON:
-		dev_dbg(codec_dai->dev, "setting bias ON\n");
-		break;
-
-	case SND_SOC_BIAS_OFF:
-		dev_dbg(codec_dai->dev, "setting bias OFF\n");
-		break;
-
 	default:
-		dev_dbg(codec_dai->dev, "setting bias OTHER: %d\n", level);
 		break;
 	}
-
-	dev_dbg(codec_dai->dev, "%s() - exit\n", __func__);
 
 	return 0;
 }
 
-static int wm8962_set_bias_level_post(struct snd_soc_card *card,
+static void dump_codec_regs(struct snd_soc_component *component) {
+	unsigned reg;
+
+#define jemDUMP_REG(REG) reg =\
+	snd_soc_component_read32(component, WM8962_##REG);\
+	pr_debug("reg" #REG ": 0x%04x\n", reg);
+
+	jemDUMP_REG(CLOCKING1);
+	jemDUMP_REG(CLOCKING2);
+	jemDUMP_REG(FLL_CONTROL_1);
+	jemDUMP_REG(PWR_MGMT_1);
+	jemDUMP_REG(PWR_MGMT_2);
+	jemDUMP_REG(DC_SERVO_6);
+}
+
+static int ti_wm8962_set_bias_level_post(struct snd_soc_card *card,
 	struct snd_soc_dapm_context *dapm,
 	enum snd_soc_bias_level level)
 {
-	// struct jem_wm8962_data *priv =	snd_soc_card_get_drvdata(card);
-	struct snd_soc_pcm_runtime *rtd = snd_soc_get_pcm_runtime(card, card->dai_link[0].name);
+	struct jem_card_data *priv = snd_soc_card_get_drvdata(card);
+	struct snd_soc_pcm_runtime *rtd = snd_soc_get_pcm_runtime(card,
+						card->dai_link[0].name);
 	struct snd_soc_dai *codec_dai = rtd->codec_dai;
 	struct snd_soc_component *component = snd_soc_dapm_to_component(dapm);
 	int ret;
-	unsigned reg;
 
 	if (dapm->dev != codec_dai->dev)
 		return 0;
@@ -181,61 +164,41 @@ static int wm8962_set_bias_level_post(struct snd_soc_card *card,
 	switch (level) {
 	case SND_SOC_BIAS_STANDBY:
 		dev_dbg(codec_dai->dev, "setting bias STANDBY\n");
-		if (dapm->bias_level == SND_SOC_BIAS_PREPARE) {
-			dev_dbg(codec_dai->dev, "Stopping SYSCLK\n");
-			ret = snd_soc_dai_set_sysclk(codec_dai, WM8962_SYSCLK_MCLK,
-						SYSCLK_RATE, SND_SOC_CLOCK_IN);
-			if (ret < 0) {
-				pr_err("Failed to set SYSCLK: %d\n", ret);
-				return ret;
-			}
+		if (dapm->bias_level != SND_SOC_BIAS_PREPARE)
+			break;
 
-			dev_dbg(codec_dai->dev, "Stopping FLL\n");
-			ret = snd_soc_dai_set_pll(codec_dai, WM8962_FLL, WM8962_FLL_MCLK,
-						0, 0);
-			if (ret < 0) {
-				pr_err("Failed to stop FLL: %d\n", ret);
-				return ret;
-			}
+		dev_dbg(codec_dai->dev, "Stopping SYSCLK\n");
+		ret = snd_soc_dai_set_sysclk(codec_dai, WM8962_SYSCLK_MCLK,
+				priv->sysclk_rate, SND_SOC_CLOCK_IN);
+		if (ret < 0) {
+			pr_err("Failed to set SYSCLK: %d\n", ret);
+			return ret;
 		}
-		break;
 
-	case SND_SOC_BIAS_PREPARE:
-		dev_dbg(codec_dai->dev, "setting bias PREPARE\n");
+		dev_dbg(codec_dai->dev, "Stopping FLL\n");
+		ret = snd_soc_dai_set_pll(codec_dai,
+				WM8962_FLL, WM8962_FLL_MCLK, 0, 0);
+		if (ret < 0) {
+			pr_err("Failed to stop FLL: %d\n", ret);
+			return ret;
+		}
 		break;
 
 	case SND_SOC_BIAS_ON:
 		dev_dbg(codec_dai->dev, "setting bias ON\n");
-
-#define jemDUMP_REG(REG) reg = snd_soc_component_read32(component, WM8962_##REG);\
-		pr_debug("reg" #REG ": 0x%04x\n", reg);
-
-		jemDUMP_REG(CLOCKING1);
-		jemDUMP_REG(CLOCKING2);
-		jemDUMP_REG(FLL_CONTROL_1);
-		jemDUMP_REG(PWR_MGMT_1);
-		jemDUMP_REG(PWR_MGMT_2);
-		jemDUMP_REG(DC_SERVO_6);
-
-		break;
-
-	case SND_SOC_BIAS_OFF:
-		dev_dbg(codec_dai->dev, "setting bias OFF\n");
+		// dump_codec_regs(component);
 		break;
 
 	default:
-		dev_dbg(codec_dai->dev, "setting bias OTHER: %d\n", level);
 		break;
 	}
 
 	dapm->bias_level = level;
-	dev_dbg(codec_dai->dev, "%s() - exit\n", __func__);
 
 	return 0;
 }
 
-/* jem machine dapm widgets */
-static const struct snd_soc_dapm_widget jem_wm8962_dapm_widgets[] = {
+static const struct snd_soc_dapm_widget ti_wm8962_dapm_widgets[] = {
 	SND_SOC_DAPM_HP("Headphone", NULL),
 	SND_SOC_DAPM_SPK("Main Speaker", NULL),
 };
@@ -254,11 +217,9 @@ static const struct snd_soc_dapm_route audio_map[] = {
 	{ "Main Speaker", NULL, "SPKOUTR" },
 };
 
-/* Digital audio interface glue - connects codec <--> CPU */
 static struct snd_soc_dai_link jem_dai_links[] = {
 	{
 		.name = "JemAudio",
-		// .stream_name = "wm8962",
 		.stream_name = "Playback",
 		.codec_dai_name = "wm8962",
 		.dai_fmt = SND_SOC_DAIFMT_DSP_B | SND_SOC_DAIFMT_NB_NF |
@@ -274,36 +235,29 @@ static struct snd_soc_card snd_soc_jem = {
 	.dai_link = jem_dai_links,
 	.num_links = ARRAY_SIZE(jem_dai_links),
 
-	// .set_bias_level	= wm8962_set_bias_level,
-	// .set_bias_level_post = wm8962_set_bias_level_post,
+	.set_bias_level	= ti_wm8962_set_bias_level,
+	.set_bias_level_post = ti_wm8962_set_bias_level_post,
 
-	.dapm_widgets = jem_wm8962_dapm_widgets,
-	.num_dapm_widgets = ARRAY_SIZE(jem_wm8962_dapm_widgets),
+	.dapm_widgets = ti_wm8962_dapm_widgets,
+	.num_dapm_widgets = ARRAY_SIZE(ti_wm8962_dapm_widgets),
 	.dapm_routes = audio_map,
 	.num_dapm_routes = ARRAY_SIZE(audio_map),
-	.controls = bowser_controls,
-	.num_controls = ARRAY_SIZE(bowser_controls),
+	// .controls = bowser_controls,
+	// .num_controls = ARRAY_SIZE(bowser_controls),
 
 	.fully_routed = true,
 };
 
 static int ti_wm8962_probe(struct platform_device *pdev)
 {
-	struct jem_wm8962_data *priv;
+	struct jem_card_data *priv;
 	struct snd_soc_card *card = &snd_soc_jem;
-	// struct snd_soc_dai_link *dai_link;
-	// struct simple_dai_props *dai_props;
 	struct device_node *ssi_np, *codec_np;
 	struct platform_device *ssi_pdev;
 	struct i2c_client *codec_dev;
 	int ret = 0;
 
-	dev_dbg(&pdev->dev, "Jem Audio Card / OMAP4x SoC init\n");
-
-	if (!pdev->dev.of_node || !of_device_is_available(pdev->dev.of_node)) {
-		dev_dbg(&pdev->dev, "Legacy probe not supported\n");
-		return -EINVAL;
-	}
+	dev_dbg(&pdev->dev, "Jem Audio Card / OMAP4x SoC probe\n");
 
 	ssi_np = of_parse_phandle(pdev->dev.of_node, "ssi-controller", 0);
 	codec_np = of_parse_phandle(pdev->dev.of_node, "audio-codec", 0);
@@ -322,11 +276,10 @@ static int ti_wm8962_probe(struct platform_device *pdev)
 	codec_dev = of_find_i2c_device_by_node(codec_np);
 	if (!codec_dev || !codec_dev->dev.driver) {
 		dev_err(&pdev->dev, "failed to find codec platform device\n");
-		ret = -EINVAL;
+		ret = -EPROBE_DEFER; //-EINVAL; // FIXME: defer conditionally
 		goto fail;
 	}
 
-	/* Allocate the private data and the DAI link array */
 	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
@@ -338,14 +291,14 @@ static int ti_wm8962_probe(struct platform_device *pdev)
 		goto fail;
 	}
 
-	priv->mclk_rate = MCLK_RATE;//clk_get_rate(priv->mclk);
+	// priv->mclk_rate = clk_get_rate(priv->mclk);
+	priv->mclk_rate = MCLK_RATE;
 	ret = clk_set_rate(priv->mclk, priv->mclk_rate);
-	ret |= clk_prepare_enable(priv->mclk);
 	if (ret) {
-		dev_err(&pdev->dev, "failed to set or enable codec clk: %d\n", ret);
+		dev_err(&pdev->dev, "failed to set codec clk rate: %d\n", ret);
 		goto fail;
 	}
-	dev_dbg(&pdev->dev, "MCLK enabled: %d\n", priv->mclk_rate);
+	dev_dbg(&pdev->dev, "MCLK new rate: %d\n", priv->mclk_rate);
 
 
 	/* Init snd_soc_card */
@@ -354,13 +307,12 @@ static int ti_wm8962_probe(struct platform_device *pdev)
 	jem_dai_links[0].platform_of_node	= ssi_np;
 	jem_dai_links[0].cpu_dai_name		= dev_name(&ssi_pdev->dev);
 
-
 	snd_soc_card_set_drvdata(card, priv);
 
 	ret = devm_snd_soc_register_card(&pdev->dev, card);
 	if (ret) {
 		dev_err(&pdev->dev, "snd_soc_register_card failed (%d)\n", ret);
-		goto clk_fail;
+		goto fail;
 	}
 	dev_dbg(&codec_dev->dev, "Card registered\n");
 
@@ -369,8 +321,6 @@ static int ti_wm8962_probe(struct platform_device *pdev)
 
 	return 0;
 
-clk_fail:
-	clk_disable_unprepare(priv->mclk);
 fail:
 	of_node_put(ssi_np);
 	of_node_put(codec_np);
@@ -381,12 +331,7 @@ fail:
 static int ti_wm8962_remove(struct platform_device *pdev)
 {
 	struct snd_soc_card *card = platform_get_drvdata(pdev);
-	struct jem_wm8962_data *priv = snd_soc_card_get_drvdata(card);
-
-	if (!IS_ERR(priv->mclk)) {
-		clk_disable_unprepare(priv->mclk);
-		dev_dbg(&pdev->dev, "MCLK disabled\n");
-	}
+	struct jem_card_data *priv = snd_soc_card_get_drvdata(card);
 
 	dev_dbg(&pdev->dev, "Card removed\n");
 
