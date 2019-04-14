@@ -97,48 +97,18 @@
 	};
 
 	sound1 {
-		status = "disabled";
+		status = "okay";
 
 		compatible = "ti,jem-audio";
 		model = "wm8962-audio";
 		ssi-controller = <&mcbsp2>;
 		audio-codec = <&wm_codec>;
-		audio-routing =
-				"Headphone", "HPOUTL",
+		audio-routing =	"Headphone", "HPOUTL",
 				"Headphone", "HPOUTR",
 				"Main Speaker", "SPKOUTL",
 				"Main Speaker", "SPKOUTR";
-	};
 
-	sound2 {
-		status = "okay";
-		compatible = "simple-audio-card";
-		simple-audio-card,name = "wm-sound";
-
-		simple-audio-card,format = "dsp_b";
-		simple-audio-card,bitclock-master = <&link0_codec>;
-		simple-audio-card,frame-master = <&link0_codec>;
-		simple-audio-card,mclk-fs = <512>;
-
-		simple-audio-card,hp-det-gpio = <&gpio6 11 GPIO_ACTIVE_LOW>;
-
-		simple-audio-card,widgets =
-				"Headphone", "Headphone Jack",
-				"Speaker", "Main Speaker";
-
-		simple-audio-card,routing =
-				"Headphone Jack", "HPOUTL",
-				"Headphone Jack", "HPOUTR",
-				"Main Speaker", "SPKOUTL",
-				"Main Speaker", "SPKOUTR";
-
-		link0_cpu: simple-audio-card,cpu {
-			sound-dai = <&mcbsp2>;
-		};
-
-		link0_codec: simple-audio-card,codec {
-			sound-dai = <&wm_codec>;
-		};
+		headset-detect-gpios = <&gpio6 11 GPIO_ACTIVE_LOW>;
 	};
 
 	/* backlight PWM */
