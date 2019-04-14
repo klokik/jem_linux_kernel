@@ -52,12 +52,13 @@ struct wwan_on_off {
 };
 
 static bool wwan_on_off_is_powered_on(struct wwan_on_off *wwan)
-{ /* check with physical interfaces if possible */
+{
+	/* check with physical interfaces if possible */
 	if (!IS_ERR_OR_NULL(wwan->feedback_gpio)) {
-		pr_debug("%s: gpio value = %d\n", __func__, gpiod_get_value_cansleep(wwan->feedback_gpio));
-		pr_debug("%s: return '%s'\n", __func__, gpiod_get_value_cansleep(wwan->feedback_gpio)?"true":"false");
+		pr_debug("%s: gpio value = %d\n", __func__,
+			gpiod_get_value_cansleep(wwan->feedback_gpio));
 
-		return gpiod_get_value_cansleep(wwan->feedback_gpio); /* read gpio */
+		return gpiod_get_value_cansleep(wwan->feedback_gpio);
 	}
 
 	if (!IS_ERR_OR_NULL(wwan->usb_phy)) {
@@ -81,6 +82,7 @@ static bool wwan_on_off_is_powered_on(struct wwan_on_off *wwan)
 static void wwan_on_off_set_power(struct wwan_on_off *wwan, bool on)
 {
 	int state;
+	int ret;
 
 	pr_debug("%s:on = %d\n", __func__, on);
 
@@ -95,7 +97,7 @@ static void wwan_on_off_set_power(struct wwan_on_off *wwan, bool on)
 
 	if(state != on) {
 		if (on && !IS_ERR_OR_NULL(wwan->vcc_regulator) && !regulator_is_enabled(wwan->vcc_regulator)) {
-			regulator_enable(wwan->vcc_regulator);
+			ret = regulator_enable(wwan->vcc_regulator);
 			gpiod_set_value_cansleep(wwan->reset_gpio, 0);	/* deassert pmic reset */
 			msleep(200); // min 20ms
 
@@ -111,11 +113,10 @@ static void wwan_on_off_set_power(struct wwan_on_off *wwan, bool on)
 
 		pr_debug("%s: send impulse\n", __func__);
 		gpiod_set_value_cansleep(wwan->on_off_gpio, 1);
-		// FIXME: check feedback_gpio for early end of impulse
 		msleep(600);
 		gpiod_set_value_cansleep(wwan->on_off_gpio, 0);
 
-		msleep(on ? 6000 : 2000); // TBD
+		msleep(on ? 6000 : 1000); // TBD
 
 		if (!on) {
 			gpiod_set_value_cansleep(wwan->usb_en_gpio, 0);
@@ -135,9 +136,7 @@ static void wwan_on_off_set_power(struct wwan_on_off *wwan, bool on)
 		}
 	}
 
-#ifdef DEBUG
 	pr_debug("%s: done\n", __func__);
-#endif
 }
 
 static int wwan_on_off_rfkill_set_block(void *data, bool blocked)
@@ -188,7 +187,7 @@ static int wwan_on_off_probe(struct platform_device *pdev)
 	wwan->reset_gpio = devm_gpiod_get(&pdev->dev, "reset", GPIOD_OUT_HIGH);
 	wwan->usb_en_gpio = devm_gpiod_get(&pdev->dev, "usb-en", GPIOD_OUT_HIGH);
 
-	wwan->host_wake_gpio = devm_gpiod_get(&pdev->dev, "host-wake", GPIOD_IN);
+	// wwan->host_wake_gpio = devm_gpiod_get(&pdev->dev, "host-wake", GPIOD_IN);
 
 	wwan->vcc_regulator = devm_regulator_get_optional(&pdev->dev, "modem");
 	if (IS_ERR_OR_NULL(wwan->vcc_regulator)) {
@@ -200,13 +199,15 @@ static int wwan_on_off_probe(struct platform_device *pdev)
 	}
 
 	wwan->usb_phy = devm_usb_get_phy_by_phandle(dev, "usb-port", 0);
-	pr_info("%s: onoff = %p indicator = %p %d usb_phy = %ld\n", __func__, wwan->on_off_gpio, wwan->feedback_gpio, PTR_ERR(wwan->usb_phy));
+	pr_info("%s: onoff = %p indicator = %p usb_phy = %lu\n",
+		__func__, wwan->on_off_gpio, wwan->feedback_gpio,
+		PTR_ERR(wwan->usb_phy));
 	// get optional reference to USB PHY (through "usb-port")
 
 	pr_debug("%s: wwan_on_off_probe() wwan=%p\n", __func__, wwan);
 
 	// FIXME: read from of_device_id table
-	wwan->can_turnoff = of_device_is_compatible(dev->of_node, "option,gtm601-power");
+	wwan->can_turnoff = of_property_read_bool(dev->of_node, "can-turnoff");
 	wwan->is_power_on = false;  /* assume initial power is off */
 
 	rf_kill = rfkill_alloc("WWAN", &pdev->dev,
@@ -314,7 +315,7 @@ static struct platform_driver wwan_on_off_driver = {
 
 static int __init wwan_on_off_init(void)
 {
-	printk("%s: wwan_on_off_init\n", __func__);
+	pr_debug("%s: wwan_on_off_init\n", __func__);
 	return platform_driver_register(&wwan_on_off_driver);
 }
 module_init(wwan_on_off_init);

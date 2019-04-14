@@ -238,14 +238,12 @@
 
 	modem_power: modem_power_reg {
 		compatible = "regulator-fixed";
-		regulator-name = "modem_vbus_power";
-		regulator-min-microvolt = <1800000>;
-		regulator-max-microvolt = <1800000>;
+		regulator-name = "modem_vbat_power";
+		regulator-min-microvolt = <3500000>;
+		regulator-max-microvolt = <3500000>;
 		gpios = <&gpio2 29 GPIO_ACTIVE_HIGH>;    /* wan_bost_en gpio_61 */
-		startup-delay-us = <100000>;
+		startup-delay-us = <10000>;
 		enable-active-high;
-
-		// regulator-always-on;
 	};
 
 	modem_en: modem {
@@ -268,6 +266,8 @@
 		/* VBUS supply should probably be controlled through the USB PHY driver for the modem port */
 		usb-port = <&hsusb2_phy>;       /* USB phy where we can check the modem status */
 		// vbus-supply = <&modem_vbus_hdmi_power>;
+
+		can-turnoff;
 	};
 };
 
