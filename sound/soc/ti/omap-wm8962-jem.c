@@ -74,6 +74,19 @@ static int ti_wm8962_set_bias_level(struct snd_soc_card *card,
 		return 0;
 
 	switch (level) {
+	case SND_SOC_BIAS_STANDBY:
+		dev_dbg(codec_dai->dev, "setting bias STANDBY\n");
+		if (dapm->bias_level != SND_SOC_BIAS_OFF)
+			break;
+
+		ret = clk_enable(priv->mclk);
+		if (ret < 0) {
+			dev_err(codec_dai->dev,
+				"Failed to enable MCLK: %d\n", ret);
+			return ret;
+		}
+		break;
+
 	case SND_SOC_BIAS_PREPARE:
 		dev_dbg(codec_dai->dev, "setting bias PREPARE\n");
 		if (dapm->bias_level != SND_SOC_BIAS_STANDBY)
@@ -138,6 +151,11 @@ static int ti_wm8962_set_bias_level_post(struct snd_soc_card *card,
 		return 0;
 
 	switch (level) {
+	case SND_SOC_BIAS_OFF:
+		dev_dbg(codec_dai->dev, "setting bias OFF\n");
+		clk_disable(priv->mclk);
+		break;
+
 	case SND_SOC_BIAS_STANDBY:
 		dev_dbg(codec_dai->dev, "setting bias STANDBY\n");
 		if (dapm->bias_level != SND_SOC_BIAS_PREPARE)
@@ -248,6 +266,8 @@ static int ti_wm8962_probe(struct platform_device *pdev)
 	struct platform_device *ssi_pdev;
 	struct i2c_client *codec_dev;
 	struct gpio_desc *hp_detect_gpio;
+	struct snd_soc_component *component;
+	struct snd_soc_pcm_runtime *rtd;
 	int ret = 0;
 
 	dev_dbg(&pdev->dev, "Jem Audio Card / OMAP4x SoC probe\n");
@@ -291,11 +311,11 @@ static int ti_wm8962_probe(struct platform_device *pdev)
 		goto fail;
 	}
 
-	// priv->mclk_rate = clk_get_rate(priv->mclk);
-	priv->mclk_rate = MCLK_RATE;
+	priv->mclk_rate = MCLK_RATE; // TODO: get from external source
 	ret = clk_set_rate(priv->mclk, priv->mclk_rate);
+	ret |= clk_prepare(priv->mclk);
 	if (ret) {
-		dev_err(&pdev->dev, "failed to set codec clk rate: %d\n", ret);
+		dev_err(&pdev->dev, "failed to prepare mclk: %d\n", ret);
 		goto fail;
 	}
 	dev_dbg(&pdev->dev, "MCLK new rate: %d\n", priv->mclk_rate);
@@ -334,7 +354,9 @@ static int ti_wm8962_probe(struct platform_device *pdev)
 		goto fail;
 	}
 
-	// wm8962_mic_detect(component, priv->jack);
+	rtd = snd_soc_get_pcm_runtime(card, card->dai_link[0].name);
+	component = rtd->codec_dai->component;
+	// wm8962_mic_detect(component, &priv->jack); // FIXME: DC servo timeout, probably needs irq
 
 fail:
 	of_node_put(ssi_np);
