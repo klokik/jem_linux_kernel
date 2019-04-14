@@ -62,7 +62,7 @@ static int ti_wm8962_hw_params(struct snd_pcm_substream *substream,
 	return ret;
 }
 
-static struct snd_soc_ops jem_ops = {
+static struct snd_soc_ops dai_link_ops = {
 	.hw_params = ti_wm8962_hw_params,
 };
 
@@ -310,10 +310,14 @@ static int ti_wm8962_probe(struct platform_device *pdev)
 	priv->dai_links[0].dai_fmt = SND_SOC_DAIFMT_DSP_B |
 				     SND_SOC_DAIFMT_NB_NF |
 				     SND_SOC_DAIFMT_CBM_CFM,
-	priv->dai_links[0].ops = &jem_ops,
+	priv->dai_links[0].ops = &dai_link_ops,
 	priv->dai_links[0].codec_of_node	= codec_np;
 	priv->dai_links[0].platform_of_node	= ssi_np;
 	priv->dai_links[0].cpu_dai_name	= dev_name(&ssi_pdev->dev);
+
+	// priv->dai_links[1] = priv->dai_links[0];
+	// priv->dai_links[1].name = "wm8962-capture",
+	// priv->dai_links[1].stream_name = "Capture",
 
 	card->dai_link = priv->dai_links;
 	card->num_links = ARRAY_SIZE(priv->dai_links);

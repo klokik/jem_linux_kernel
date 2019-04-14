@@ -46,9 +46,9 @@
 
 		pinctrl-names = "default";
 		pinctrl-0 = <
-				&lid_key_pins
-				&vol_up_key_pins
-				&vol_down_key_pins
+			&lid_key_pins
+			&vol_up_key_pins
+			&vol_down_key_pins
 		>;
 
 		case_lid {
@@ -227,7 +227,6 @@
 		reset-gpios		= <&gpio1 19 GPIO_ACTIVE_LOW>;
 		usb-en-gpios		= <&gpio1 20 GPIO_ACTIVE_HIGH>;
 
-		// interrupts...
 		// host-wake-gpio = <&gpio1 3 GPIO_ACTIVE_HIGH>;
 		interrupts = <3 IRQ_TYPE_EDGE_RISING>;	/* gpio_3 trigger_rising */
 		interrupt-parent = <&gpio1>;
@@ -235,7 +234,6 @@
 		modem-supply = <&modem_power>;
 		/* VBUS supply should probably be controlled through the USB PHY driver for the modem port */
 		usb-port = <&hsusb2_phy>;       /* USB phy where we can check the modem status */
-		// vbus-supply = <&modem_vbus_hdmi_power>;
 
 		can-turnoff;
 	};
