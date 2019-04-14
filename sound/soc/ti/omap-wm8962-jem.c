@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0
+
 #define DEBUG 1
 
 #include <linux/of_platform.h>
@@ -5,9 +7,11 @@
 #include <linux/clk.h>
 #include <linux/platform_device.h>
 #include <linux/module.h>
+#include <linux/gpio/consumer.h>
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/soc.h>
+#include <sound/jack.h>
 
 #include "../codecs/wm8962.h"
 
@@ -20,6 +24,8 @@ struct jem_card_data {
 	struct clk *mclk;
 	unsigned int mclk_rate;
 	unsigned int sysclk_rate;
+
+	struct snd_soc_jack jack;
 };
 
 static int ti_wm8962_hw_params(struct snd_pcm_substream *substream,
@@ -131,8 +137,6 @@ static int ti_wm8962_set_bias_level_post(struct snd_soc_card *card,
 	if (dapm->dev != codec_dai->dev)
 		return 0;
 
-	dev_dbg(codec_dai->dev, "%s() - enter\n", __func__);
-
 	switch (level) {
 	case SND_SOC_BIAS_STANDBY:
 		dev_dbg(codec_dai->dev, "setting bias STANDBY\n");
@@ -170,15 +174,9 @@ static int ti_wm8962_set_bias_level_post(struct snd_soc_card *card,
 	return 0;
 }
 
-static const struct snd_soc_dapm_widget ti_wm8962_dapm_widgets[] = {
+static const struct snd_soc_dapm_widget dapm_widgets[] = {
 	SND_SOC_DAPM_HP("Headphone", NULL),
 	SND_SOC_DAPM_SPK("Main Speaker", NULL),
-};
-
-static const struct snd_kcontrol_new bowser_controls[] = {
-	SOC_DAPM_PIN_SWITCH("DMICDAT"),
-	SOC_DAPM_PIN_SWITCH("Headphone"),
-	SOC_DAPM_PIN_SWITCH("Main Speaker"),
 };
 
 static const struct snd_soc_dapm_route audio_map[] = {
@@ -189,7 +187,32 @@ static const struct snd_soc_dapm_route audio_map[] = {
 	{ "Main Speaker", NULL, "SPKOUTR" },
 };
 
-static struct snd_soc_dai_link jem_dai_links[] = {
+static struct snd_soc_jack_pin headset_pins[] = {
+	{
+		.pin = "Headphone",
+		.mask = SND_JACK_HEADSET,
+	},
+	{
+		.pin = "Main Speaker",
+		.mask = SND_JACK_HEADSET,
+		.invert = 1,
+	},
+	// { // TODO: check
+	// 	.pin = "DMICDAT",
+	// 	.mask = SND_JACK_HEADSET,
+	// 	.invert = 1,
+	// },
+};
+
+static struct snd_soc_jack_gpio headset_gpios[] = {
+	{
+		.name = "headset-gpio",
+		.report = SND_JACK_HEADSET,
+		.debounce_time = 150,
+	},
+};
+
+static struct snd_soc_dai_link dai_links[] = {
 	{
 		.name = "JemAudio",
 		.stream_name = "Playback",
@@ -200,22 +223,19 @@ static struct snd_soc_dai_link jem_dai_links[] = {
 	},
 };
 
-/* Audio machine driver */
 static struct snd_soc_card snd_soc_jem = {
 	.name = "JemAudio",
 	.owner = THIS_MODULE,
-	.dai_link = jem_dai_links,
-	.num_links = ARRAY_SIZE(jem_dai_links),
+	.dai_link = dai_links,
+	.num_links = ARRAY_SIZE(dai_links),
 
 	.set_bias_level	= ti_wm8962_set_bias_level,
 	.set_bias_level_post = ti_wm8962_set_bias_level_post,
 
-	.dapm_widgets = ti_wm8962_dapm_widgets,
-	.num_dapm_widgets = ARRAY_SIZE(ti_wm8962_dapm_widgets),
+	.dapm_widgets = dapm_widgets,
+	.num_dapm_widgets = ARRAY_SIZE(dapm_widgets),
 	.dapm_routes = audio_map,
 	.num_dapm_routes = ARRAY_SIZE(audio_map),
-	// .controls = bowser_controls,
-	// .num_controls = ARRAY_SIZE(bowser_controls),
 
 	.fully_routed = true,
 };
@@ -227,6 +247,7 @@ static int ti_wm8962_probe(struct platform_device *pdev)
 	struct device_node *ssi_np, *codec_np;
 	struct platform_device *ssi_pdev;
 	struct i2c_client *codec_dev;
+	struct gpio_desc *hp_detect_gpio;
 	int ret = 0;
 
 	dev_dbg(&pdev->dev, "Jem Audio Card / OMAP4x SoC probe\n");
@@ -245,11 +266,18 @@ static int ti_wm8962_probe(struct platform_device *pdev)
 		ret = -EINVAL;
 		goto fail;
 	}
+
 	codec_dev = of_find_i2c_device_by_node(codec_np);
 	if (!codec_dev || !codec_dev->dev.driver) {
 		dev_err(&pdev->dev, "failed to find codec platform device\n");
-		ret = -EPROBE_DEFER; //-EINVAL; // FIXME: defer conditionally
+		ret = -EPROBE_DEFER; // FIXME: defer conditionally
 		goto fail;
+	}
+
+	hp_detect_gpio = devm_gpiod_get(&pdev->dev, "headset-detect", GPIOD_IN);
+	if (IS_ERR(hp_detect_gpio)) {
+		dev_err(&pdev->dev, "cannot get hp gpio (%ld)\n",
+			PTR_ERR(hp_detect_gpio));
 	}
 
 	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
@@ -273,11 +301,10 @@ static int ti_wm8962_probe(struct platform_device *pdev)
 	dev_dbg(&pdev->dev, "MCLK new rate: %d\n", priv->mclk_rate);
 
 
-	/* Init snd_soc_card */
 	card->dev = &pdev->dev;
-	jem_dai_links[0].codec_of_node		= codec_np;
-	jem_dai_links[0].platform_of_node	= ssi_np;
-	jem_dai_links[0].cpu_dai_name		= dev_name(&ssi_pdev->dev);
+	dai_links[0].codec_of_node	= codec_np;
+	dai_links[0].platform_of_node	= ssi_np;
+	dai_links[0].cpu_dai_name	= dev_name(&ssi_pdev->dev);
 
 	snd_soc_card_set_drvdata(card, priv);
 
@@ -288,10 +315,26 @@ static int ti_wm8962_probe(struct platform_device *pdev)
 	}
 	dev_dbg(&codec_dev->dev, "Card registered\n");
 
-	of_node_put(ssi_np);
-	of_node_put(codec_np);
 
-	return 0;
+	ret = snd_soc_card_jack_new(card, "Headset Jack",
+				    SND_JACK_HEADSET | SND_JACK_BTN_0,
+				    &priv->jack, headset_pins,
+				    ARRAY_SIZE(headset_pins));
+	if (ret) {
+		dev_err(&pdev->dev, "failed to add jack: %d\n", ret);
+		goto fail;
+	}
+
+	headset_gpios[0].desc = hp_detect_gpio;
+	headset_gpios[0].invert = gpiod_is_active_low(hp_detect_gpio);
+	ret = snd_soc_jack_add_gpios(&priv->jack, ARRAY_SIZE(headset_gpios),
+				     headset_gpios);
+	if (ret) {
+		dev_err(&pdev->dev, "failed to add jack gpios: %d\n", ret);
+		goto fail;
+	}
+
+	// wm8962_mic_detect(component, priv->jack);
 
 fail:
 	of_node_put(ssi_np);
@@ -329,4 +372,4 @@ module_platform_driver(ti_wm8962_driver);
 
 MODULE_AUTHOR("Mykola Dolhyi <0xb000@gmail.com>");
 MODULE_DESCRIPTION("ALSA SoC OMAP4 / KF HD Jem");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");
