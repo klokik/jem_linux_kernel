@@ -2499,7 +2499,7 @@ static int summit_smb347_probe(struct i2c_client *client,
 		goto err5;
 	}*/
 
-	regulator = regulator_get(&client->dev, "power");
+	regulator = devm_regulator_get(&client->dev, "power");
 	if (IS_ERR(regulator)) {
 		pr_err("Unable to get regulator for gpio0\n");
 		ret = -EINVAL;
@@ -2715,8 +2715,6 @@ err3:
 err5:
 	i2c_set_clientdata(client, NULL);
 err6:
-	if (priv && priv->regulator)
-		regulator_put(priv->regulator);
 
 	kfree(priv);
 
@@ -2738,9 +2736,6 @@ static int summit_smb347_remove(struct i2c_client *client)
 
 	power_supply_unregister(priv->usb);
 	power_supply_unregister(priv->ac);
-
-	if (priv && priv->regulator)
-		regulator_put(priv->regulator);
 
 	i2c_set_clientdata(client, NULL);
 
