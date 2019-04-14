@@ -25,7 +25,12 @@ struct jem_card_data {
 	unsigned int mclk_rate;
 	unsigned int sysclk_rate;
 
+	struct snd_soc_card card;
+
 	struct snd_soc_jack jack;
+	struct snd_soc_jack_gpio headset_gpio;
+
+	struct snd_soc_dai_link dai_links[1];
 };
 
 static int ti_wm8962_hw_params(struct snd_pcm_substream *substream,
@@ -49,7 +54,8 @@ static int ti_wm8962_hw_params(struct snd_pcm_substream *substream,
 	ret = snd_soc_dai_set_sysclk(codec_dai, WM8962_SYSCLK_FLL,
 				     priv->sysclk_rate, SND_SOC_CLOCK_IN);
 	if (ret < 0) {
-		dev_err(codec_dai->dev, "Failed to set CODEC SYSCLK: %d\n", ret);
+		dev_err(codec_dai->dev,
+			"Failed to set CODEC SYSCLK: %d\n", ret);
 		return ret;
 	}
 
@@ -222,46 +228,10 @@ static struct snd_soc_jack_pin headset_pins[] = {
 	// },
 };
 
-static struct snd_soc_jack_gpio headset_gpios[] = {
-	{
-		.name = "headset-gpio",
-		.report = SND_JACK_HEADSET,
-		.debounce_time = 150,
-	},
-};
-
-static struct snd_soc_dai_link dai_links[] = {
-	{
-		.name = "JemAudio",
-		.stream_name = "Playback",
-		.codec_dai_name = "wm8962",
-		.dai_fmt = SND_SOC_DAIFMT_DSP_B | SND_SOC_DAIFMT_NB_NF |
-			   SND_SOC_DAIFMT_CBM_CFM,
-		.ops = &jem_ops,
-	},
-};
-
-static struct snd_soc_card snd_soc_jem = {
-	.name = "JemAudio",
-	.owner = THIS_MODULE,
-	.dai_link = dai_links,
-	.num_links = ARRAY_SIZE(dai_links),
-
-	.set_bias_level	= ti_wm8962_set_bias_level,
-	.set_bias_level_post = ti_wm8962_set_bias_level_post,
-
-	.dapm_widgets = dapm_widgets,
-	.num_dapm_widgets = ARRAY_SIZE(dapm_widgets),
-	.dapm_routes = audio_map,
-	.num_dapm_routes = ARRAY_SIZE(audio_map),
-
-	.fully_routed = true,
-};
-
 static int ti_wm8962_probe(struct platform_device *pdev)
 {
 	struct jem_card_data *priv;
-	struct snd_soc_card *card = &snd_soc_jem;
+	struct snd_soc_card *card;
 	struct device_node *ssi_np, *codec_np;
 	struct platform_device *ssi_pdev;
 	struct i2c_client *codec_dev;
@@ -320,11 +290,33 @@ static int ti_wm8962_probe(struct platform_device *pdev)
 	}
 	dev_dbg(&pdev->dev, "MCLK new rate: %d\n", priv->mclk_rate);
 
-
+	card = &priv->card;
 	card->dev = &pdev->dev;
-	dai_links[0].codec_of_node	= codec_np;
-	dai_links[0].platform_of_node	= ssi_np;
-	dai_links[0].cpu_dai_name	= dev_name(&ssi_pdev->dev);
+
+	card->name = "ti-wm8962-audio";
+	of_property_read_string(pdev->dev.of_node, "model", &card->name);
+	card->owner = THIS_MODULE;
+	card->set_bias_level = ti_wm8962_set_bias_level;
+	card->set_bias_level_post = ti_wm8962_set_bias_level_post;
+	card->dapm_widgets = dapm_widgets;
+	card->num_dapm_widgets = ARRAY_SIZE(dapm_widgets);
+	card->dapm_routes = audio_map;
+	card->num_dapm_routes = ARRAY_SIZE(audio_map);
+	card->fully_routed = true;
+
+	priv->dai_links[0].name = "wm8962-playback",
+	priv->dai_links[0].stream_name = "Playback",
+	priv->dai_links[0].codec_dai_name = "wm8962",
+	priv->dai_links[0].dai_fmt = SND_SOC_DAIFMT_DSP_B |
+				     SND_SOC_DAIFMT_NB_NF |
+				     SND_SOC_DAIFMT_CBM_CFM,
+	priv->dai_links[0].ops = &jem_ops,
+	priv->dai_links[0].codec_of_node	= codec_np;
+	priv->dai_links[0].platform_of_node	= ssi_np;
+	priv->dai_links[0].cpu_dai_name	= dev_name(&ssi_pdev->dev);
+
+	card->dai_link = priv->dai_links;
+	card->num_links = ARRAY_SIZE(priv->dai_links);
 
 	snd_soc_card_set_drvdata(card, priv);
 
@@ -345,10 +337,12 @@ static int ti_wm8962_probe(struct platform_device *pdev)
 		goto fail;
 	}
 
-	headset_gpios[0].desc = hp_detect_gpio;
-	headset_gpios[0].invert = gpiod_is_active_low(hp_detect_gpio);
-	ret = snd_soc_jack_add_gpios(&priv->jack, ARRAY_SIZE(headset_gpios),
-				     headset_gpios);
+	priv->headset_gpio.name = "headset-gpio",
+	priv->headset_gpio.report = SND_JACK_HEADSET,
+	priv->headset_gpio.debounce_time = 150,
+	priv->headset_gpio.desc = hp_detect_gpio;
+	priv->headset_gpio.invert = gpiod_is_active_low(hp_detect_gpio);
+	ret = snd_soc_jack_add_gpios(&priv->jack, 1, &priv->headset_gpio);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to add jack gpios: %d\n", ret);
 		goto fail;
@@ -356,7 +350,8 @@ static int ti_wm8962_probe(struct platform_device *pdev)
 
 	rtd = snd_soc_get_pcm_runtime(card, card->dai_link[0].name);
 	component = rtd->codec_dai->component;
-	// wm8962_mic_detect(component, &priv->jack); // FIXME: DC servo timeout, probably needs irq
+	// FIXME: DC servo timeout, probably needs irq
+	// wm8962_mic_detect(component, &priv->jack);
 
 fail:
 	of_node_put(ssi_np);
