@@ -3211,7 +3211,7 @@ static int wm8962_beep_event(struct input_dev *dev, unsigned int type,
 
 	/* Kick the beep from a workqueue */
 	wm8962->beep_rate = hz;
-	schedule_work(&wm8962->beep_work);
+	// schedule_work(&wm8962->beep_work);
 	return 0;
 }
 
