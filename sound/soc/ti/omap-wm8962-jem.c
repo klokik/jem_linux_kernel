@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
 
-#define DEBUG 1
-
 #include <linux/of_platform.h>
 #include <linux/i2c.h>
 #include <linux/clk.h>
