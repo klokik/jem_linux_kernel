@@ -20,8 +20,12 @@
 #define PCIE_PORT_SERVICE_HP		(1 << PCIE_PORT_SERVICE_HP_SHIFT)
 #define PCIE_PORT_SERVICE_DPC_SHIFT	3	/* Downstream Port Containment */
 #define PCIE_PORT_SERVICE_DPC		(1 << PCIE_PORT_SERVICE_DPC_SHIFT)
+#define PCIE_PORT_SERVICE_BWNOTIF_SHIFT	4	/* Bandwidth notification */
+#define PCIE_PORT_SERVICE_BWNOTIF	(1 << PCIE_PORT_SERVICE_BWNOTIF_SHIFT)
 
-#define PCIE_PORT_DEVICE_MAXSERVICES   4
+#define PCIE_PORT_DEVICE_MAXSERVICES   5
+
+extern bool pcie_ports_dpc_native;
 
 #ifdef CONFIG_PCIEAER
 int pcie_aer_init(void);
@@ -45,6 +49,12 @@ static inline int pcie_pme_init(void) { return 0; }
 int pcie_dpc_init(void);
 #else
 static inline int pcie_dpc_init(void) { return 0; }
+#endif
+
+#ifdef CONFIG_PCIE_BW
+int pcie_bandwidth_notification_init(void);
+#else
+static inline int pcie_bandwidth_notification_init(void) { return 0; }
 #endif
 
 /* Port Type */
@@ -81,9 +91,6 @@ struct pcie_port_service_driver {
 
 	/* Device driver may resume normal operations */
 	void (*error_resume)(struct pci_dev *dev);
-
-	/* Link Reset Capability - AER service driver specific */
-	pci_ers_result_t (*reset_link)(struct pci_dev *dev);
 
 	int port_type;  /* Type of the port this driver can handle */
 	u32 service;    /* Port service this device represents */
@@ -151,7 +158,5 @@ static inline int pcie_aer_get_firmware_first(struct pci_dev *pci_dev)
 }
 #endif
 
-struct pcie_port_service_driver *pcie_port_find_service(struct pci_dev *dev,
-							u32 service);
 struct device *pcie_port_find_device(struct pci_dev *dev, u32 service);
 #endif /* _PORTDRV_H_ */

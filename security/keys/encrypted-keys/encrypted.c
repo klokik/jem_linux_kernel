@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2010 IBM Corporation
  * Copyright (C) 2010 Politecnico di Torino, Italy
@@ -6,10 +7,6 @@
  * Authors:
  * Mimi Zohar <zohar@us.ibm.com>
  * Roberto Sassu <roberto.sassu@polito.it>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, version 2 of the License.
  *
  * See Documentation/security/keys/trusted-encrypted.rst
  */
@@ -60,11 +57,11 @@ static int blksize;
 static struct crypto_shash *hash_tfm;
 
 enum {
-	Opt_err = -1, Opt_new, Opt_load, Opt_update
+	Opt_new, Opt_load, Opt_update, Opt_err
 };
 
 enum {
-	Opt_error = -1, Opt_default, Opt_ecryptfs, Opt_enc32
+	Opt_default, Opt_ecryptfs, Opt_enc32, Opt_error
 };
 
 static const match_table_t key_format_tokens = {
@@ -333,7 +330,6 @@ static int calc_hash(struct crypto_shash *tfm, u8 *digest,
 	int err;
 
 	desc->tfm = tfm;
-	desc->flags = 0;
 
 	err = crypto_shash_digest(desc, buf, buflen, digest);
 	shash_desc_zero(desc);
@@ -906,14 +902,14 @@ out:
 }
 
 /*
- * encrypted_read - format and copy the encrypted data to userspace
+ * encrypted_read - format and copy out the encrypted data
  *
  * The resulting datablob format is:
  * <master-key name> <decrypted data length> <encrypted iv> <encrypted data>
  *
  * On success, return to userspace the encrypted key datablob size.
  */
-static long encrypted_read(const struct key *key, char __user *buffer,
+static long encrypted_read(const struct key *key, char *buffer,
 			   size_t buflen)
 {
 	struct encrypted_key_payload *epayload;
@@ -961,8 +957,7 @@ static long encrypted_read(const struct key *key, char __user *buffer,
 	key_put(mkey);
 	memzero_explicit(derived_key, sizeof(derived_key));
 
-	if (copy_to_user(buffer, ascii_buf, asciiblob_len) != 0)
-		ret = -EFAULT;
+	memcpy(buffer, ascii_buf, asciiblob_len);
 	kzfree(ascii_buf);
 
 	return asciiblob_len;

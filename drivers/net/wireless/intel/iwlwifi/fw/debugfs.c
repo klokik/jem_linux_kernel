@@ -173,9 +173,8 @@ static const struct file_operations iwl_dbgfs_##name##_ops = {		\
 	_FWRT_DEBUGFS_READ_WRITE_FILE_OPS(name, bufsz, struct iwl_fw_runtime)
 
 #define FWRT_DEBUGFS_ADD_FILE_ALIAS(alias, name, parent, mode) do {	\
-	if (!debugfs_create_file(alias, mode, parent, fwrt,		\
-				 &iwl_dbgfs_##name##_ops))		\
-		goto err;						\
+	debugfs_create_file(alias, mode, parent, fwrt,			\
+			    &iwl_dbgfs_##name##_ops);			\
 	} while (0)
 #define FWRT_DEBUGFS_ADD_FILE(name, parent, mode) \
 	FWRT_DEBUGFS_ADD_FILE_ALIAS(#name, name, parent, mode)
@@ -321,14 +320,20 @@ out:
 
 FWRT_DEBUGFS_WRITE_FILE_OPS(send_hcmd, 512);
 
-int iwl_fwrt_dbgfs_register(struct iwl_fw_runtime *fwrt,
+static ssize_t iwl_dbgfs_fw_dbg_domain_read(struct iwl_fw_runtime *fwrt,
+					    size_t size, char *buf)
+{
+	return scnprintf(buf, size, "0x%08x\n",
+			 fwrt->trans->dbg.domains_bitmap);
+}
+
+FWRT_DEBUGFS_READ_FILE_OPS(fw_dbg_domain, 20);
+
+void iwl_fwrt_dbgfs_register(struct iwl_fw_runtime *fwrt,
 			    struct dentry *dbgfs_dir)
 {
 	INIT_DELAYED_WORK(&fwrt->timestamp.wk, iwl_fw_timestamp_marker_wk);
 	FWRT_DEBUGFS_ADD_FILE(timestamp_marker, dbgfs_dir, 0200);
 	FWRT_DEBUGFS_ADD_FILE(send_hcmd, dbgfs_dir, 0200);
-	return 0;
-err:
-	IWL_ERR(fwrt, "Can't create the fwrt debugfs directory\n");
-	return -ENOMEM;
+	FWRT_DEBUGFS_ADD_FILE(fw_dbg_domain, dbgfs_dir, 0400);
 }

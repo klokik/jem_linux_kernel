@@ -44,7 +44,9 @@ void __init paging_init(void)
 	int i;
 
 	empty_zero_page = (void *) memblock_alloc(PAGE_SIZE, PAGE_SIZE);
-	memset((void *) empty_zero_page, 0, PAGE_SIZE);
+	if (!empty_zero_page)
+		panic("%s: Failed to allocate %lu bytes align=0x%lx\n",
+		      __func__, PAGE_SIZE, PAGE_SIZE);
 
 	pg_dir = swapper_pg_dir;
 	memset(swapper_pg_dir, 0, sizeof(swapper_pg_dir));
@@ -52,6 +54,9 @@ void __init paging_init(void)
 	size = num_pages * sizeof(pte_t);
 	size = (size + PAGE_SIZE) & ~(PAGE_SIZE-1);
 	next_pgtable = (unsigned long) memblock_alloc(size, PAGE_SIZE);
+	if (!next_pgtable)
+		panic("%s: Failed to allocate %lu bytes align=0x%lx\n",
+		      __func__, size, PAGE_SIZE);
 
 	bootmem_end = (next_pgtable + size + PAGE_SIZE) & PAGE_MASK;
 	pg_dir += PAGE_OFFSET >> PGDIR_SHIFT;
@@ -87,6 +92,8 @@ int cf_tlb_miss(struct pt_regs *regs, int write, int dtlb, int extension_word)
 	unsigned long flags, mmuar, mmutr;
 	struct mm_struct *mm;
 	pgd_t *pgd;
+	p4d_t *p4d;
+	pud_t *pud;
 	pmd_t *pmd;
 	pte_t *pte;
 	int asid;
@@ -108,7 +115,19 @@ int cf_tlb_miss(struct pt_regs *regs, int write, int dtlb, int extension_word)
 		return -1;
 	}
 
-	pmd = pmd_offset(pgd, mmuar);
+	p4d = p4d_offset(pgd, mmuar);
+	if (p4d_none(*p4d)) {
+		local_irq_restore(flags);
+		return -1;
+	}
+
+	pud = pud_offset(p4d, mmuar);
+	if (pud_none(*pud)) {
+		local_irq_restore(flags);
+		return -1;
+	}
+
+	pmd = pmd_offset(pud, mmuar);
 	if (pmd_none(*pmd)) {
 		local_irq_restore(flags);
 		return -1;

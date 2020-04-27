@@ -11,6 +11,15 @@
 #include <asm/msr-index.h>
 
 /*
+ * This should be used immediately before a retpoline alternative. It tells
+ * objtool where the retpolines are so that it can make sense of the control
+ * flow by just reading the original instruction(s) and ignoring the
+ * alternatives.
+ */
+#define ANNOTATE_NOSPEC_ALTERNATIVE \
+	ANNOTATE_IGNORE_ALTERNATIVE
+
+/*
  * Fill the CPU return stack buffer.
  *
  * Each entry in the RSB, if used for a speculative 'ret', contains an
@@ -28,7 +37,6 @@
  */
 
 #define RSB_CLEAR_LOOPS		32	/* To forcibly overwrite all entries */
-#define RSB_FILL_LOOPS		16	/* To avoid underflow */
 
 /*
  * Google experimented with loop-unrolling and this turned out to be
@@ -55,19 +63,6 @@
 	add	$(BITS_PER_LONG/8) * nr, sp;
 
 #ifdef __ASSEMBLY__
-
-/*
- * This should be used immediately before a retpoline alternative.  It tells
- * objtool where the retpolines are so that it can make sense of the control
- * flow by just reading the original instruction(s) and ignoring the
- * alternatives.
- */
-.macro ANNOTATE_NOSPEC_ALTERNATIVE
-	.Lannotate_\@:
-	.pushsection .discard.nospec
-	.long .Lannotate_\@ - .
-	.popsection
-.endm
 
 /*
  * This should be used immediately before an indirect jump/call. It tells
@@ -152,12 +147,6 @@
 
 #else /* __ASSEMBLY__ */
 
-#define ANNOTATE_NOSPEC_ALTERNATIVE				\
-	"999:\n\t"						\
-	".pushsection .discard.nospec\n\t"			\
-	".long 999b - .\n\t"					\
-	".popsection\n\t"
-
 #define ANNOTATE_RETPOLINE_SAFE					\
 	"999:\n\t"						\
 	".pushsection .discard.retpoline_safe\n\t"		\
@@ -202,7 +191,7 @@
 	"    	lfence;\n"					\
 	"       jmp    902b;\n"					\
 	"       .align 16\n"					\
-	"903:	addl   $4, %%esp;\n"				\
+	"903:	lea    4(%%esp), %%esp;\n"			\
 	"       pushl  %[thunk_target];\n"			\
 	"       ret;\n"						\
 	"       .align 16\n"					\
@@ -247,27 +236,6 @@ enum ssb_mitigation {
 
 extern char __indirect_thunk_start[];
 extern char __indirect_thunk_end[];
-
-/*
- * On VMEXIT we must ensure that no RSB predictions learned in the guest
- * can be followed in the host, by overwriting the RSB completely. Both
- * retpoline and IBRS mitigations for Spectre v2 need this; only on future
- * CPUs with IBRS_ALL *might* it be avoided.
- */
-static inline void vmexit_fill_RSB(void)
-{
-#ifdef CONFIG_RETPOLINE
-	unsigned long loops;
-
-	asm volatile (ANNOTATE_NOSPEC_ALTERNATIVE
-		      ALTERNATIVE("jmp 910f",
-				  __stringify(__FILL_RETURN_BUFFER(%0, RSB_CLEAR_LOOPS, %1)),
-				  X86_FEATURE_RETPOLINE)
-		      "910:"
-		      : "=r" (loops), ASM_CALL_CONSTRAINT
-		      : : "memory" );
-#endif
-}
 
 static __always_inline
 void alternative_msr_write(unsigned int msr, u64 val, unsigned int feature)
@@ -317,6 +285,56 @@ do {									\
 DECLARE_STATIC_KEY_FALSE(switch_to_cond_stibp);
 DECLARE_STATIC_KEY_FALSE(switch_mm_cond_ibpb);
 DECLARE_STATIC_KEY_FALSE(switch_mm_always_ibpb);
+
+DECLARE_STATIC_KEY_FALSE(mds_user_clear);
+DECLARE_STATIC_KEY_FALSE(mds_idle_clear);
+
+#include <asm/segment.h>
+
+/**
+ * mds_clear_cpu_buffers - Mitigation for MDS and TAA vulnerability
+ *
+ * This uses the otherwise unused and obsolete VERW instruction in
+ * combination with microcode which triggers a CPU buffer flush when the
+ * instruction is executed.
+ */
+static inline void mds_clear_cpu_buffers(void)
+{
+	static const u16 ds = __KERNEL_DS;
+
+	/*
+	 * Has to be the memory-operand variant because only that
+	 * guarantees the CPU buffer flush functionality according to
+	 * documentation. The register-operand variant does not.
+	 * Works with any segment selector, but a valid writable
+	 * data segment is the fastest variant.
+	 *
+	 * "cc" clobber is required because VERW modifies ZF.
+	 */
+	asm volatile("verw %[ds]" : : [ds] "m" (ds) : "cc");
+}
+
+/**
+ * mds_user_clear_cpu_buffers - Mitigation for MDS and TAA vulnerability
+ *
+ * Clear CPU buffers if the corresponding static key is enabled
+ */
+static inline void mds_user_clear_cpu_buffers(void)
+{
+	if (static_branch_likely(&mds_user_clear))
+		mds_clear_cpu_buffers();
+}
+
+/**
+ * mds_idle_clear_cpu_buffers - Mitigation for MDS vulnerability
+ *
+ * Clear CPU buffers if the corresponding static key is enabled
+ */
+static inline void mds_idle_clear_cpu_buffers(void)
+{
+	if (static_branch_likely(&mds_idle_clear))
+		mds_clear_cpu_buffers();
+}
 
 #endif /* __ASSEMBLY__ */
 

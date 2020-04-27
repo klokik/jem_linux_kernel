@@ -170,7 +170,7 @@ VIDEO_GET_EVENT call.
     #define VIDEO_EVENT_FRAME_RATE_CHANGED  2
     #define VIDEO_EVENT_DECODER_STOPPED     3
     #define VIDEO_EVENT_VSYNC       4
-	__kernel_time_t timestamp;
+	long timestamp;
 	union {
 	    video_size_t size;
 	    unsigned int frame_rate;    /* in frames per 1000sec */
@@ -202,7 +202,7 @@ If video_blank is set video will be blanked out if the channel is
 changed or if playback is stopped. Otherwise, the last picture will be
 displayed. play_state indicates if the video is currently frozen,
 stopped, or being played back. The stream_source corresponds to the
-seleted source for the video stream. It can come either from the
+selected source for the video stream. It can come either from the
 demultiplexer or from memory. The video_format indicates the aspect
 ratio (one of 4:3 or 16:9) of the currently played video stream.
 Finally, display_format corresponds to the selected cropping mode in

@@ -667,6 +667,7 @@
 #define MIPS_CONF5_FRE		(_ULCAST_(1) << 8)
 #define MIPS_CONF5_UFE		(_ULCAST_(1) << 9)
 #define MIPS_CONF5_CA2		(_ULCAST_(1) << 14)
+#define MIPS_CONF5_MI		(_ULCAST_(1) << 17)
 #define MIPS_CONF5_CRCP		(_ULCAST_(1) << 18)
 #define MIPS_CONF5_MSAEN	(_ULCAST_(1) << 27)
 #define MIPS_CONF5_EVA		(_ULCAST_(1) << 28)
@@ -687,6 +688,12 @@
 
 #define MIPS_CONF7_IAR		(_ULCAST_(1) << 10)
 #define MIPS_CONF7_AR		(_ULCAST_(1) << 16)
+
+/* Ingenic HPTLB off bits */
+#define XBURST_PAGECTRL_HPTLB_DIS 0xa9000000
+
+/* Ingenic Config7 bits */
+#define MIPS_CONF7_BTB_LOOP_EN	(_ULCAST_(1) << 4)
 
 /* Config7 Bits specific to MIPS Technologies. */
 
@@ -1094,9 +1101,12 @@
 /*
  * Bits 22:20 of the FPU Status Register will be read as 0,
  * and should be written as zero.
+ * MAC2008 was removed in Release 5 so we still treat it as
+ * reserved.
  */
 #define FPU_CSR_RSVD	(_ULCAST_(7) << 20)
 
+#define FPU_CSR_MAC2008	(_ULCAST_(1) << 20)
 #define FPU_CSR_ABS2008	(_ULCAST_(1) << 19)
 #define FPU_CSR_NAN2008	(_ULCAST_(1) << 18)
 
@@ -1244,6 +1254,13 @@ __asm__(".macro	parse_r var r\n\t"
 /* Instructions with no operands */
 #define _ASM_MACRO_0(OP, ENC)						\
 	__asm__(".macro	" #OP "\n\t"					\
+		ENC							\
+		".endm")
+
+/* Instructions with 1 register operand & 1 immediate operand */
+#define _ASM_MACRO_1R1I(OP, R1, I2, ENC)				\
+	__asm__(".macro	" #OP " " #R1 ", " #I2 "\n\t"			\
+		"parse_r __" #R1 ", \\" #R1 "\n\t"			\
 		ENC							\
 		".endm")
 
@@ -1603,6 +1620,9 @@ do {									\
 #define read_c0_xcontextconfig()	__read_ulong_c0_register($4, 3)
 #define write_c0_xcontextconfig(val)	__write_ulong_c0_register($4, 3, val)
 
+#define read_c0_memorymapid()		__read_32bit_c0_register($4, 5)
+#define write_c0_memorymapid(val)	__write_32bit_c0_register($4, 5, val)
+
 #define read_c0_pagemask()	__read_32bit_c0_register($5, 0)
 #define write_c0_pagemask(val)	__write_32bit_c0_register($5, 0, val)
 
@@ -1956,6 +1976,9 @@ do {									\
 
 #define read_c0_brcm_sleepcount()	__read_32bit_c0_register($22, 7)
 #define write_c0_brcm_sleepcount(val)	__write_32bit_c0_register($22, 7, val)
+
+/* Ingenic page ctrl register */
+#define write_c0_page_ctrl(val)	__write_32bit_c0_register($5, 4, val)
 
 /*
  * Macros to access the guest system control coprocessor
@@ -2802,6 +2825,7 @@ __BUILD_SET_C0(status)
 __BUILD_SET_C0(cause)
 __BUILD_SET_C0(config)
 __BUILD_SET_C0(config5)
+__BUILD_SET_C0(config7)
 __BUILD_SET_C0(intcontrol)
 __BUILD_SET_C0(intctl)
 __BUILD_SET_C0(srsmap)

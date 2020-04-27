@@ -1,5 +1,5 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
- * SPDX-License-Identifier: GPL-2.0
  * Remote Controller core raw events header
  *
  * Copyright (C) 2010 by Mauro Carvalho Chehab
@@ -131,6 +131,11 @@ struct ir_raw_event_ctrl {
 		unsigned int bits;
 		bool stick_keyboard;
 	} imon;
+	struct rcmm_dec {
+		int state;
+		unsigned int count;
+		u32 bits;
+	} rcmm;
 };
 
 /* Mutex for locking raw IR processing and handler change */

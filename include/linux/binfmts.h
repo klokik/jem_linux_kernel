@@ -15,7 +15,6 @@ struct filename;
  * This structure is used to hold the arguments that are used when loading binaries.
  */
 struct linux_binprm {
-	char buf[BINPRM_BUF_SIZE];
 #ifdef CONFIG_MMU
 	struct vm_area_struct *vma;
 	unsigned long vma_pages;
@@ -45,7 +44,13 @@ struct linux_binprm {
 		 * exec has happened. Used to sanitize execution environment
 		 * and to set AT_SECURE auxv for glibc.
 		 */
-		secureexec:1;
+		secureexec:1,
+		/*
+		 * Set by flush_old_exec, when exec_mmap has been called.
+		 * This is past the point of no return, when the
+		 * exec_update_mutex has been taken.
+		 */
+		called_exec_mmap:1;
 #ifdef __alpha__
 	unsigned int taso:1;
 #endif
@@ -64,6 +69,8 @@ struct linux_binprm {
 	unsigned long loader, exec;
 
 	struct rlimit rlim_stack; /* Saved RLIMIT_STACK used during exec. */
+
+	char buf[BINPRM_BUF_SIZE];
 } __randomize_layout;
 
 #define BINPRM_FLAGS_ENFORCE_NONDUMP_BIT 0

@@ -10,16 +10,16 @@
  */
 
 #include <linux/unistd.h>
-#include <linux/miscdevice.h>	/* for misc_register, and SYNTH_MINOR */
+#include <linux/miscdevice.h>	/* for misc_register, and MISC_DYNAMIC_MINOR */
 #include <linux/poll.h>		/* for poll_wait() */
-#include <linux/sched/signal.h> /* schedule(), signal_pending(), TASK_INTERRUPTIBLE */
+
+/* schedule(), signal_pending(), TASK_INTERRUPTIBLE */
+#include <linux/sched/signal.h>
 
 #include "spk_priv.h"
 #include "speakup.h"
 
 #define DRV_VERSION "2.6"
-#define SOFTSYNTH_MINOR 26 /* might as well give it one more than /dev/synth */
-#define SOFTSYNTHU_MINOR 27 /* might as well give it one more than /dev/synth */
 #define PROCSPEECH 0x0d
 #define CLEAR_SYNTH 0x18
 
@@ -208,12 +208,15 @@ static ssize_t softsynthx_read(struct file *fp, char __user *buf, size_t count,
 		return -EINVAL;
 
 	spin_lock_irqsave(&speakup_info.spinlock, flags);
+	synth_soft.alive = 1;
 	while (1) {
 		prepare_to_wait(&speakup_event, &wait, TASK_INTERRUPTIBLE);
-		if (!unicode)
-			synth_buffer_skip_nonlatin1();
-		if (!synth_buffer_empty() || speakup_info.flushing)
-			break;
+		if (synth_current() == &synth_soft) {
+			if (!unicode)
+				synth_buffer_skip_nonlatin1();
+			if (!synth_buffer_empty() || speakup_info.flushing)
+				break;
+		}
 		spin_unlock_irqrestore(&speakup_info.spinlock, flags);
 		if (fp->f_flags & O_NONBLOCK) {
 			finish_wait(&speakup_event, &wait);
@@ -233,6 +236,8 @@ static ssize_t softsynthx_read(struct file *fp, char __user *buf, size_t count,
 
 	/* Keep 3 bytes available for a 16bit UTF-8-encoded character */
 	while (chars_sent <= count - bytes_per_ch) {
+		if (synth_current() != &synth_soft)
+			break;
 		if (speakup_info.flushing) {
 			speakup_info.flushing = 0;
 			ch = '\x18';
@@ -329,7 +334,8 @@ static __poll_t softsynth_poll(struct file *fp, struct poll_table_struct *wait)
 	poll_wait(fp, &speakup_event, wait);
 
 	spin_lock_irqsave(&speakup_info.spinlock, flags);
-	if (!synth_buffer_empty() || speakup_info.flushing)
+	if (synth_current() == &synth_soft &&
+	    (!synth_buffer_empty() || speakup_info.flushing))
 		ret = EPOLLIN | EPOLLRDNORM;
 	spin_unlock_irqrestore(&speakup_info.spinlock, flags);
 	return ret;
@@ -367,7 +373,7 @@ static int softsynth_probe(struct spk_synth *synth)
 	if (misc_registered != 0)
 		return 0;
 	memset(&synth_device, 0, sizeof(synth_device));
-	synth_device.minor = SOFTSYNTH_MINOR;
+	synth_device.minor = MISC_DYNAMIC_MINOR;
 	synth_device.name = "softsynth";
 	synth_device.fops = &softsynth_fops;
 	if (misc_register(&synth_device)) {
@@ -376,17 +382,19 @@ static int softsynth_probe(struct spk_synth *synth)
 	}
 
 	memset(&synthu_device, 0, sizeof(synthu_device));
-	synthu_device.minor = SOFTSYNTHU_MINOR;
+	synthu_device.minor = MISC_DYNAMIC_MINOR;
 	synthu_device.name = "softsynthu";
 	synthu_device.fops = &softsynthu_fops;
 	if (misc_register(&synthu_device)) {
-		pr_warn("Couldn't initialize miscdevice /dev/softsynth.\n");
+		pr_warn("Couldn't initialize miscdevice /dev/softsynthu.\n");
 		return -ENODEV;
 	}
 
 	misc_registered = 1;
-	pr_info("initialized device: /dev/softsynth, node (MAJOR 10, MINOR 26)\n");
-	pr_info("initialized device: /dev/softsynthu, node (MAJOR 10, MINOR 27)\n");
+	pr_info("initialized device: /dev/softsynth, node (MAJOR 10, MINOR %d)\n",
+		synth_device.minor);
+	pr_info("initialized device: /dev/softsynthu, node (MAJOR 10, MINOR %d)\n",
+		synthu_device.minor);
 	return 0;
 }
 

@@ -38,12 +38,12 @@ For more details see the file COPYING in the source distribution of Linux.
 	bttv
 	cafe_ccic
 	cpia2
-	cx18
 	cx2341x
 	cx88
 	davinci-vpbe
 	fimc
 	imx
+	imx7
 	ipu3
 	ivtv
 	max2175
@@ -63,6 +63,6 @@ For more details see the file COPYING in the source distribution of Linux.
 	si476x
 	soc-camera
 	uvcvideo
+	vimc
 	vivid
-	zoran
 	zr364xx

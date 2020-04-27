@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * linux/net/sunrpc/svcsock.c
  *
@@ -54,6 +55,7 @@
 #include <linux/sunrpc/stats.h>
 #include <linux/sunrpc/xprt.h>
 
+#include "socklib.h"
 #include "sunrpc.h"
 
 #define RPCDBG_FACILITY	RPCDBG_SVCXPRT
@@ -173,109 +175,10 @@ static void svc_set_cmsg_data(struct svc_rqst *rqstp, struct cmsghdr *cmh)
 	}
 }
 
-/*
- * send routine intended to be shared by the fore- and back-channel
- */
-int svc_send_common(struct socket *sock, struct xdr_buf *xdr,
-		    struct page *headpage, unsigned long headoffset,
-		    struct page *tailpage, unsigned long tailoffset)
+static int svc_sock_read_payload(struct svc_rqst *rqstp, unsigned int offset,
+				 unsigned int length)
 {
-	int		result;
-	int		size;
-	struct page	**ppage = xdr->pages;
-	size_t		base = xdr->page_base;
-	unsigned int	pglen = xdr->page_len;
-	unsigned int	flags = MSG_MORE | MSG_SENDPAGE_NOTLAST;
-	int		slen;
-	int		len = 0;
-
-	slen = xdr->len;
-
-	/* send head */
-	if (slen == xdr->head[0].iov_len)
-		flags = 0;
-	len = kernel_sendpage(sock, headpage, headoffset,
-				  xdr->head[0].iov_len, flags);
-	if (len != xdr->head[0].iov_len)
-		goto out;
-	slen -= xdr->head[0].iov_len;
-	if (slen == 0)
-		goto out;
-
-	/* send page data */
-	size = PAGE_SIZE - base < pglen ? PAGE_SIZE - base : pglen;
-	while (pglen > 0) {
-		if (slen == size)
-			flags = 0;
-		result = kernel_sendpage(sock, *ppage, base, size, flags);
-		if (result > 0)
-			len += result;
-		if (result != size)
-			goto out;
-		slen -= size;
-		pglen -= size;
-		size = PAGE_SIZE < pglen ? PAGE_SIZE : pglen;
-		base = 0;
-		ppage++;
-	}
-
-	/* send tail */
-	if (xdr->tail[0].iov_len) {
-		result = kernel_sendpage(sock, tailpage, tailoffset,
-				   xdr->tail[0].iov_len, 0);
-		if (result > 0)
-			len += result;
-	}
-
-out:
-	return len;
-}
-
-
-/*
- * Generic sendto routine
- */
-static int svc_sendto(struct svc_rqst *rqstp, struct xdr_buf *xdr)
-{
-	struct svc_sock	*svsk =
-		container_of(rqstp->rq_xprt, struct svc_sock, sk_xprt);
-	struct socket	*sock = svsk->sk_sock;
-	union {
-		struct cmsghdr	hdr;
-		long		all[SVC_PKTINFO_SPACE / sizeof(long)];
-	} buffer;
-	struct cmsghdr *cmh = &buffer.hdr;
-	int		len = 0;
-	unsigned long tailoff;
-	unsigned long headoff;
-	RPC_IFDEBUG(char buf[RPC_MAX_ADDRBUFLEN]);
-
-	if (rqstp->rq_prot == IPPROTO_UDP) {
-		struct msghdr msg = {
-			.msg_name	= &rqstp->rq_addr,
-			.msg_namelen	= rqstp->rq_addrlen,
-			.msg_control	= cmh,
-			.msg_controllen	= sizeof(buffer),
-			.msg_flags	= MSG_MORE,
-		};
-
-		svc_set_cmsg_data(rqstp, cmh);
-
-		if (sock_sendmsg(sock, &msg) < 0)
-			goto out;
-	}
-
-	tailoff = ((unsigned long)xdr->tail[0].iov_base) & (PAGE_SIZE-1);
-	headoff = 0;
-	len = svc_send_common(sock, xdr, rqstp->rq_respages[0], headoff,
-			       rqstp->rq_respages[0], tailoff);
-
-out:
-	dprintk("svc: socket %p sendto([%p %zu... ], %d) = %d (addr %s)\n",
-		svsk, xdr->head[0].iov_base, xdr->head[0].iov_len,
-		xdr->len, len, svc_print_addr(rqstp, buf, sizeof(buf)));
-
-	return len;
+	return 0;
 }
 
 /*
@@ -349,12 +252,16 @@ static ssize_t svc_recvfrom(struct svc_rqst *rqstp, struct kvec *iov,
 /*
  * Set socket snd and rcv buffer lengths
  */
-static void svc_sock_setbufsize(struct socket *sock, unsigned int snd,
-				unsigned int rcv)
+static void svc_sock_setbufsize(struct svc_sock *svsk, unsigned int nreqs)
 {
+	unsigned int max_mesg = svsk->sk_xprt.xpt_server->sv_max_mesg;
+	struct socket *sock = svsk->sk_sock;
+
+	nreqs = min(nreqs, INT_MAX / 2 / max_mesg);
+
 	lock_sock(sock->sk);
-	sock->sk->sk_sndbuf = snd * 2;
-	sock->sk->sk_rcvbuf = rcv * 2;
+	sock->sk->sk_sndbuf = nreqs * max_mesg * 2;
+	sock->sk->sk_rcvbuf = nreqs * max_mesg * 2;
 	sock->sk->sk_write_space(sock->sk);
 	release_sock(sock->sk);
 }
@@ -516,9 +423,7 @@ static int svc_udp_recvfrom(struct svc_rqst *rqstp)
 	     * provides an upper bound on the number of threads
 	     * which will access the socket.
 	     */
-	    svc_sock_setbufsize(svsk->sk_sock,
-				(serv->sv_nrthreads+3) * serv->sv_max_mesg,
-				(serv->sv_nrthreads+3) * serv->sv_max_mesg);
+	    svc_sock_setbufsize(svsk, serv->sv_nrthreads + 3);
 
 	clear_bit(XPT_DATA, &svsk->sk_xprt.xpt_flags);
 	skb = NULL;
@@ -597,17 +502,45 @@ out_free:
 	return 0;
 }
 
-static int
-svc_udp_sendto(struct svc_rqst *rqstp)
+/**
+ * svc_udp_sendto - Send out a reply on a UDP socket
+ * @rqstp: completed svc_rqst
+ *
+ * Returns the number of bytes sent, or a negative errno.
+ */
+static int svc_udp_sendto(struct svc_rqst *rqstp)
 {
-	int		error;
+	struct svc_xprt *xprt = rqstp->rq_xprt;
+	struct svc_sock	*svsk = container_of(xprt, struct svc_sock, sk_xprt);
+	struct xdr_buf *xdr = &rqstp->rq_res;
+	union {
+		struct cmsghdr	hdr;
+		long		all[SVC_PKTINFO_SPACE / sizeof(long)];
+	} buffer;
+	struct cmsghdr *cmh = &buffer.hdr;
+	struct msghdr msg = {
+		.msg_name	= &rqstp->rq_addr,
+		.msg_namelen	= rqstp->rq_addrlen,
+		.msg_control	= cmh,
+		.msg_controllen	= sizeof(buffer),
+	};
+	unsigned int uninitialized_var(sent);
+	int err;
 
-	error = svc_sendto(rqstp, &rqstp->rq_res);
-	if (error == -ECONNREFUSED)
+	svc_release_udp_skb(rqstp);
+
+	svc_set_cmsg_data(rqstp, cmh);
+
+	err = xprt_sock_sendmsg(svsk->sk_sock, &msg, xdr, 0, 0, &sent);
+	xdr_free_bvec(xdr);
+	if (err == -ECONNREFUSED) {
 		/* ICMP error on earlier request. */
-		error = svc_sendto(rqstp, &rqstp->rq_res);
-
-	return error;
+		err = xprt_sock_sendmsg(svsk->sk_sock, &msg, xdr, 0, 0, &sent);
+		xdr_free_bvec(xdr);
+	}
+	if (err < 0)
+		return err;
+	return sent;
 }
 
 static int svc_udp_has_wspace(struct svc_xprt *xprt)
@@ -650,6 +583,7 @@ static const struct svc_xprt_ops svc_udp_ops = {
 	.xpo_create = svc_udp_create,
 	.xpo_recvfrom = svc_udp_recvfrom,
 	.xpo_sendto = svc_udp_sendto,
+	.xpo_read_payload = svc_sock_read_payload,
 	.xpo_release_rqst = svc_release_udp_skb,
 	.xpo_detach = svc_sock_detach,
 	.xpo_free = svc_sock_free,
@@ -681,9 +615,7 @@ static void svc_udp_init(struct svc_sock *svsk, struct svc_serv *serv)
 	 * receive and respond to one request.
 	 * svc_udp_recvfrom will re-adjust if necessary
 	 */
-	svc_sock_setbufsize(svsk->sk_sock,
-			    3 * svsk->sk_xprt.xpt_server->sv_max_mesg,
-			    3 * svsk->sk_xprt.xpt_server->sv_max_mesg);
+	svc_sock_setbufsize(svsk, 3);
 
 	/* data might have come in before data_ready set up */
 	set_bit(XPT_DATA, &svsk->sk_xprt.xpt_flags);
@@ -1127,35 +1059,41 @@ err_noclose:
 	return 0;	/* record not complete */
 }
 
-/*
- * Send out data on TCP socket.
+/**
+ * svc_tcp_sendto - Send out a reply on a TCP socket
+ * @rqstp: completed svc_rqst
+ *
+ * Returns the number of bytes sent, or a negative errno.
  */
 static int svc_tcp_sendto(struct svc_rqst *rqstp)
 {
-	struct xdr_buf	*xbufp = &rqstp->rq_res;
-	int sent;
-	__be32 reclen;
+	struct svc_xprt *xprt = rqstp->rq_xprt;
+	struct svc_sock	*svsk = container_of(xprt, struct svc_sock, sk_xprt);
+	struct xdr_buf *xdr = &rqstp->rq_res;
+	rpc_fraghdr marker = cpu_to_be32(RPC_LAST_STREAM_FRAGMENT |
+					 (u32)xdr->len);
+	struct msghdr msg = {
+		.msg_flags	= 0,
+	};
+	unsigned int uninitialized_var(sent);
+	int err;
 
-	/* Set up the first element of the reply kvec.
-	 * Any other kvecs that may be in use have been taken
-	 * care of by the server implementation itself.
-	 */
-	reclen = htonl(0x80000000|((xbufp->len ) - 4));
-	memcpy(xbufp->head[0].iov_base, &reclen, 4);
+	svc_release_skb(rqstp);
 
-	sent = svc_sendto(rqstp, &rqstp->rq_res);
-	if (sent != xbufp->len) {
-		printk(KERN_NOTICE
-		       "rpc-srv/tcp: %s: %s %d when sending %d bytes "
-		       "- shutting down socket\n",
-		       rqstp->rq_xprt->xpt_server->sv_name,
-		       (sent<0)?"got error":"sent only",
-		       sent, xbufp->len);
-		set_bit(XPT_CLOSE, &rqstp->rq_xprt->xpt_flags);
-		svc_xprt_enqueue(rqstp->rq_xprt);
-		sent = -EAGAIN;
-	}
+	err = xprt_sock_sendmsg(svsk->sk_sock, &msg, xdr, 0, marker, &sent);
+	xdr_free_bvec(xdr);
+	if (err < 0 || sent != (xdr->len + sizeof(marker)))
+		goto out_close;
 	return sent;
+
+out_close:
+	pr_notice("rpc-srv/tcp: %s: %s %d when sending %d bytes - shutting down socket\n",
+		  xprt->xpt_server->sv_name,
+		  (err < 0) ? "got error" : "sent",
+		  (err < 0) ? err : sent, xdr->len);
+	set_bit(XPT_CLOSE, &xprt->xpt_flags);
+	svc_xprt_enqueue(xprt);
+	return -EAGAIN;
 }
 
 static struct svc_xprt *svc_tcp_create(struct svc_serv *serv,
@@ -1170,6 +1108,7 @@ static const struct svc_xprt_ops svc_tcp_ops = {
 	.xpo_create = svc_tcp_create,
 	.xpo_recvfrom = svc_tcp_recvfrom,
 	.xpo_sendto = svc_tcp_sendto,
+	.xpo_read_payload = svc_sock_read_payload,
 	.xpo_release_rqst = svc_release_skb,
 	.xpo_detach = svc_tcp_sock_detach,
 	.xpo_free = svc_sock_free,
@@ -1332,13 +1271,14 @@ EXPORT_SYMBOL_GPL(svc_alien_sock);
  * @fd: file descriptor of the new listener
  * @name_return: pointer to buffer to fill in with name of listener
  * @len: size of the buffer
+ * @cred: credential
  *
  * Fills in socket name and returns positive length of name if successful.
  * Name is terminated with '\n'.  On error, returns a negative errno
  * value.
  */
 int svc_addsock(struct svc_serv *serv, const int fd, char *name_return,
-		const size_t len)
+		const size_t len, const struct cred *cred)
 {
 	int err = 0;
 	struct socket *so = sockfd_lookup(fd, &err);
@@ -1371,6 +1311,7 @@ int svc_addsock(struct svc_serv *serv, const int fd, char *name_return,
 	salen = kernel_getsockname(svsk->sk_sock, sin);
 	if (salen >= 0)
 		svc_xprt_set_local(&svsk->sk_xprt, sin, salen);
+	svsk->sk_xprt.xpt_cred = get_cred(cred);
 	svc_add_new_perm_xprt(serv, &svsk->sk_xprt);
 	return svc_one_sock_name(svsk, name_return, len);
 out:

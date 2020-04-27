@@ -12,10 +12,16 @@
 #define IGC_MDIC		0x00020  /* MDI Control - RW */
 #define IGC_MDICNFG		0x00E04  /* MDC/MDIO Configuration - RW */
 #define IGC_CONNSW		0x00034  /* Copper/Fiber switch control - RW */
+#define IGC_I225_PHPM		0x00E14  /* I225 PHY Power Management */
 
 /* Internal Packet Buffer Size Registers */
 #define IGC_RXPBS		0x02404  /* Rx Packet Buffer Size - RW */
 #define IGC_TXPBS		0x03404  /* Tx Packet Buffer Size - RW */
+#define IGC_TDFH		0x03410  /* Tx Data FIFO Head - RW */
+#define IGC_TDFT		0x03418  /* Tx Data FIFO Tail - RW */
+#define IGC_TDFHS		0x03420  /* Tx Data FIFO Head Saved - RW */
+#define IGC_TDFTS		0x03428  /* Tx Data FIFO Tail Saved - RW */
+#define IGC_TDFPC		0x03430  /* Tx Data FIFO Packet Count - RW */
 
 /* NVM  Register Descriptions */
 #define IGC_EERD		0x12014  /* EEprom mode read - RW */
@@ -80,6 +86,24 @@
 /* MSI-X Table Register Descriptions */
 #define IGC_PBACL		0x05B68  /* MSIx PBA Clear - R/W 1 to clear */
 
+/* RSS registers */
+#define IGC_MRQC		0x05818 /* Multiple Receive Control - RW */
+
+/* Filtering Registers */
+#define IGC_ETQF(_n)		(0x05CB0 + (4 * (_n))) /* EType Queue Fltr */
+
+/* ETQF register bit definitions */
+#define IGC_ETQF_FILTER_ENABLE	BIT(26)
+#define IGC_ETQF_QUEUE_ENABLE	BIT(31)
+#define IGC_ETQF_QUEUE_SHIFT	16
+#define IGC_ETQF_QUEUE_MASK	0x00070000
+#define IGC_ETQF_ETYPE_MASK	0x0000FFFF
+
+/* Redirection Table - RW Array */
+#define IGC_RETA(_i)		(0x05C00 + ((_i) * 4))
+/* RSS Random Key - RW Array */
+#define IGC_RSSRK(_i)		(0x05C80 + ((_i) * 4))
+
 /* Receive Register Descriptions */
 #define IGC_RCTL		0x00100  /* Rx Control - RW */
 #define IGC_SRRCTL(_n)		(0x0C00C + ((_n) * 0x40))
@@ -98,6 +122,7 @@
 #define IGC_UTA			0x0A000  /* Unicast Table Array - RW */
 #define IGC_RAL(_n)		(0x05400 + ((_n) * 0x08))
 #define IGC_RAH(_n)		(0x05404 + ((_n) * 0x08))
+#define IGC_VLAPQF		0x055B0  /* VLAN Priority Queue Filter VLAPQF */
 
 /* Transmit Register Descriptions */
 #define IGC_TCTL		0x00400  /* Tx Control - RW */
@@ -188,14 +213,49 @@
 #define IGC_HGOTCL	0x04130  /* Host Good Octets Transmit Count Low */
 #define IGC_HGOTCH	0x04134  /* Host Good Octets Transmit Count High */
 #define IGC_LENERRS	0x04138  /* Length Errors Count */
-#define IGC_SCVPC	0x04228  /* SerDes/SGMII Code Violation Pkt Count */
 #define IGC_HRMPC	0x0A018  /* Header Redirection Missed Packet Count */
+
+/* Time sync registers */
+#define IGC_TSICR	0x0B66C  /* Time Sync Interrupt Cause */
+#define IGC_TSIM	0x0B674  /* Time Sync Interrupt Mask Register */
+#define IGC_TSAUXC	0x0B640  /* Timesync Auxiliary Control register */
+#define IGC_TSYNCRXCTL	0x0B620  /* Rx Time Sync Control register - RW */
+#define IGC_TSYNCTXCTL	0x0B614  /* Tx Time Sync Control register - RW */
+#define IGC_TSYNCRXCFG	0x05F50  /* Time Sync Rx Configuration - RW */
+#define IGC_TSSDP	0x0003C  /* Time Sync SDP Configuration Register - RW */
+
+#define IGC_IMIR(_i)	(0x05A80 + ((_i) * 4))  /* Immediate Interrupt */
+#define IGC_IMIREXT(_i)	(0x05AA0 + ((_i) * 4))  /* Immediate INTR Ext*/
+
+#define IGC_FTQF(_n)	(0x059E0 + (4 * (_n)))  /* 5-tuple Queue Fltr */
+
+#define IGC_RXPBS	0x02404  /* Rx Packet Buffer Size - RW */
+
+/* System Time Registers */
+#define IGC_SYSTIML	0x0B600  /* System time register Low - RO */
+#define IGC_SYSTIMH	0x0B604  /* System time register High - RO */
+#define IGC_SYSTIMR	0x0B6F8  /* System time register Residue */
+#define IGC_TIMINCA	0x0B608  /* Increment attributes register - RW */
+
+#define IGC_RXSTMPL	0x0B624  /* Rx timestamp Low - RO */
+#define IGC_RXSTMPH	0x0B628  /* Rx timestamp High - RO */
+#define IGC_TXSTMPL	0x0B618  /* Tx timestamp value Low - RO */
+#define IGC_TXSTMPH	0x0B61C  /* Tx timestamp value High - RO */
 
 /* Management registers */
 #define IGC_MANC	0x05820  /* Management Control - RW */
 
 /* Shadow Ram Write Register - RW */
 #define IGC_SRWR	0x12018
+
+/* Wake Up registers */
+#define IGC_WUC		0x05800  /* Wakeup Control - RW */
+#define IGC_WUFC	0x05808  /* Wakeup Filter Control - RW */
+#define IGC_WUS		0x05810  /* Wakeup Status - R/W1C */
+#define IGC_WUPL	0x05900  /* Wakeup Packet Length - RW */
+
+/* Wake Up packet memory */
+#define IGC_WUPM_REG(_i)	(0x05A00 + ((_i) * 4))
 
 /* forward declaration */
 struct igc_hw;

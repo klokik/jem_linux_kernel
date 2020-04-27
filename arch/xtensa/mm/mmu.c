@@ -22,7 +22,9 @@
 static void * __init init_pmd(unsigned long vaddr, unsigned long n_pages)
 {
 	pgd_t *pgd = pgd_offset_k(vaddr);
-	pmd_t *pmd = pmd_offset(pgd, vaddr);
+	p4d_t *p4d = p4d_offset(pgd, vaddr);
+	pud_t *pud = pud_offset(p4d, vaddr);
+	pmd_t *pmd = pmd_offset(pud, vaddr);
 	pte_t *pte;
 	unsigned long i;
 
@@ -32,6 +34,9 @@ static void * __init init_pmd(unsigned long vaddr, unsigned long n_pages)
 		 __func__, vaddr, n_pages);
 
 	pte = memblock_alloc_low(n_pages * sizeof(pte_t), PAGE_SIZE);
+	if (!pte)
+		panic("%s: Failed to allocate %lu bytes align=%lx\n",
+		      __func__, n_pages * sizeof(pte_t), PAGE_SIZE);
 
 	for (i = 0; i < n_pages; ++i)
 		pte_clear(NULL, 0, pte + i);

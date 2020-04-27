@@ -4,6 +4,7 @@
 
 #include <linux/sched.h>
 #include <linux/kernfs.h>
+#include <linux/fs_context.h>
 #include <linux/jump_label.h>
 
 #define MSR_IA32_L3_QOS_CFG		0xc81
@@ -40,7 +41,23 @@
 #define RMID_VAL_ERROR			BIT_ULL(63)
 #define RMID_VAL_UNAVAIL		BIT_ULL(62)
 
+
+struct rdt_fs_context {
+	struct kernfs_fs_context	kfc;
+	bool				enable_cdpl2;
+	bool				enable_cdpl3;
+	bool				enable_mba_mbps;
+};
+
+static inline struct rdt_fs_context *rdt_fc2context(struct fs_context *fc)
+{
+	struct kernfs_fs_context *kfc = fc->fs_private;
+
+	return container_of(kfc, struct rdt_fs_context, kfc);
+}
+
 DECLARE_STATIC_KEY_FALSE(rdt_enable_key);
+DECLARE_STATIC_KEY_FALSE(rdt_mon_enable_key);
 
 /**
  * struct mon_evt - Entry in the event list of a resource
@@ -584,5 +601,6 @@ bool has_busy_rmid(struct rdt_resource *r, struct rdt_domain *d);
 void __check_limbo(struct rdt_domain *d, bool force_free);
 bool cbm_validate_intel(char *buf, u32 *data, struct rdt_resource *r);
 bool cbm_validate_amd(char *buf, u32 *data, struct rdt_resource *r);
+void rdt_domain_reconfigure_cdp(struct rdt_resource *r);
 
 #endif /* _ASM_X86_RESCTRL_INTERNAL_H */

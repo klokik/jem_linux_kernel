@@ -1,21 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * PTP 1588 clock support
  *
  * Copyright (C) 2010 OMICRON electronics GmbH
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #ifndef _PTP_CLOCK_KERNEL_H_
@@ -226,7 +213,21 @@ extern void ptp_clock_event(struct ptp_clock *ptp,
 extern int ptp_clock_index(struct ptp_clock *ptp);
 
 /**
+ * scaled_ppm_to_ppb() - convert scaled ppm to ppb
+ *
+ * @ppm:    Parts per million, but with a 16 bit binary fractional field
+ */
+
+extern s32 scaled_ppm_to_ppb(long ppm);
+
+/**
  * ptp_find_pin() - obtain the pin index of a given auxiliary function
+ *
+ * The caller must hold ptp_clock::pincfg_mux.  Drivers do not have
+ * access to that mutex as ptp_clock is an opaque type.  However, the
+ * core code acquires the mutex before invoking the driver's
+ * ptp_clock_info::enable() callback, and so drivers may call this
+ * function from that context.
  *
  * @ptp:    The clock obtained from ptp_clock_register().
  * @func:   One of the ptp_pin_function enumerated values.
@@ -239,6 +240,19 @@ int ptp_find_pin(struct ptp_clock *ptp,
 		 enum ptp_pin_function func, unsigned int chan);
 
 /**
+ * ptp_find_pin_unlocked() - wrapper for ptp_find_pin()
+ *
+ * This function acquires the ptp_clock::pincfg_mux mutex before
+ * invoking ptp_find_pin().  Instead of using this function, drivers
+ * should most likely call ptp_find_pin() directly from their
+ * ptp_clock_info::enable() method.
+ *
+ */
+
+int ptp_find_pin_unlocked(struct ptp_clock *ptp,
+			  enum ptp_pin_function func, unsigned int chan);
+
+/**
  * ptp_schedule_worker() - schedule ptp auxiliary work
  *
  * @ptp:    The clock obtained from ptp_clock_register().
@@ -247,6 +261,13 @@ int ptp_find_pin(struct ptp_clock *ptp,
  */
 
 int ptp_schedule_worker(struct ptp_clock *ptp, unsigned long delay);
+
+/**
+ * ptp_cancel_worker_sync() - cancel ptp auxiliary clock
+ *
+ * @ptp:     The clock obtained from ptp_clock_register().
+ */
+void ptp_cancel_worker_sync(struct ptp_clock *ptp);
 
 #else
 static inline struct ptp_clock *ptp_clock_register(struct ptp_clock_info *info,
@@ -265,6 +286,8 @@ static inline int ptp_find_pin(struct ptp_clock *ptp,
 static inline int ptp_schedule_worker(struct ptp_clock *ptp,
 				      unsigned long delay)
 { return -EOPNOTSUPP; }
+static inline void ptp_cancel_worker_sync(struct ptp_clock *ptp)
+{ }
 
 #endif
 

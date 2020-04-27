@@ -62,18 +62,6 @@ static void bch_data_insert_keys(struct closure *cl)
 	struct bkey *replace_key = op->replace ? &op->replace_key : NULL;
 	int ret;
 
-	/*
-	 * If we're looping, might already be waiting on
-	 * another journal write - can't wait on more than one journal write at
-	 * a time
-	 *
-	 * XXX: this looks wrong
-	 */
-#if 0
-	while (atomic_read(&s->cl.remaining) & CLOSURE_WAITING)
-		closure_sync(&s->cl);
-#endif
-
 	if (!op->replace)
 		journal_ref = bch_journal(op->c, &op->insert_keys,
 					  op->flush_journal ? cl : NULL);
@@ -329,12 +317,13 @@ void bch_data_insert(struct closure *cl)
 	bch_data_insert_start(cl);
 }
 
-/* Congested? */
-
-unsigned int bch_get_congested(struct cache_set *c)
+/*
+ * Congested?  Return 0 (not congested) or the limit (in sectors)
+ * beyond which we should bypass the cache due to congestion.
+ */
+unsigned int bch_get_congested(const struct cache_set *c)
 {
 	int i;
-	long rand;
 
 	if (!c->congested_read_threshold_us &&
 	    !c->congested_write_threshold_us)
@@ -353,8 +342,7 @@ unsigned int bch_get_congested(struct cache_set *c)
 	if (i > 0)
 		i = fract_exp_two(i, 6);
 
-	rand = get_random_int();
-	i -= bitmap_weight(&rand, BITS_PER_LONG);
+	i -= hweight32(get_random_u32());
 
 	return i > 0 ? i : 1;
 }
@@ -376,7 +364,7 @@ static bool check_should_bypass(struct cached_dev *dc, struct bio *bio)
 {
 	struct cache_set *c = dc->disk.c;
 	unsigned int mode = cache_mode(dc);
-	unsigned int sectors, congested = bch_get_congested(c);
+	unsigned int sectors, congested;
 	struct task_struct *task = current;
 	struct io *i;
 
@@ -391,12 +379,20 @@ static bool check_should_bypass(struct cached_dev *dc, struct bio *bio)
 		goto skip;
 
 	/*
-	 * Flag for bypass if the IO is for read-ahead or background,
-	 * unless the read-ahead request is for metadata (eg, for gfs2).
+	 * If the bio is for read-ahead or background IO, bypass it or
+	 * not depends on the following situations,
+	 * - If the IO is for meta data, always cache it and no bypass
+	 * - If the IO is not meta data, check dc->cache_reada_policy,
+	 *      BCH_CACHE_READA_ALL: cache it and not bypass
+	 *      BCH_CACHE_READA_META_ONLY: not cache it and bypass
+	 * That is, read-ahead request for metadata always get cached
+	 * (eg, for gfs2 or xfs).
 	 */
-	if (bio->bi_opf & (REQ_RAHEAD|REQ_BACKGROUND) &&
-	    !(bio->bi_opf & REQ_PRIO))
-		goto skip;
+	if ((bio->bi_opf & (REQ_RAHEAD|REQ_BACKGROUND))) {
+		if (!(bio->bi_opf & (REQ_META|REQ_PRIO)) &&
+		    (dc->cache_readahead_policy != BCH_CACHE_READA_ALL))
+			goto skip;
+	}
 
 	if (bio->bi_iter.bi_sector & (c->sb.block_size - 1) ||
 	    bio_sectors(bio) & (c->sb.block_size - 1)) {
@@ -411,6 +407,7 @@ static bool check_should_bypass(struct cached_dev *dc, struct bio *bio)
 			goto rescale;
 	}
 
+	congested = bch_get_congested(c);
 	if (!congested && !dc->sequential_cutoff)
 		goto rescale;
 
@@ -705,14 +702,14 @@ static void search_free(struct closure *cl)
 {
 	struct search *s = container_of(cl, struct search, cl);
 
-	atomic_dec(&s->d->c->search_inflight);
+	atomic_dec(&s->iop.c->search_inflight);
 
 	if (s->iop.bio)
 		bio_put(s->iop.bio);
 
 	bio_complete(s);
 	closure_debug_destroy(cl);
-	mempool_free(s, &s->d->c->search);
+	mempool_free(s, &s->iop.c->search);
 }
 
 static inline struct search *search_alloc(struct bio *bio,
@@ -755,13 +752,13 @@ static void cached_dev_bio_complete(struct closure *cl)
 	struct search *s = container_of(cl, struct search, cl);
 	struct cached_dev *dc = container_of(s->d, struct cached_dev, disk);
 
-	search_free(cl);
 	cached_dev_put(dc);
+	search_free(cl);
 }
 
 /* Process reads */
 
-static void cached_dev_cache_miss_done(struct closure *cl)
+static void cached_dev_read_error_done(struct closure *cl)
 {
 	struct search *s = container_of(cl, struct search, cl);
 
@@ -799,7 +796,22 @@ static void cached_dev_read_error(struct closure *cl)
 		closure_bio_submit(s->iop.c, bio, cl);
 	}
 
-	continue_at(cl, cached_dev_cache_miss_done, NULL);
+	continue_at(cl, cached_dev_read_error_done, NULL);
+}
+
+static void cached_dev_cache_miss_done(struct closure *cl)
+{
+	struct search *s = container_of(cl, struct search, cl);
+	struct bcache_device *d = s->d;
+
+	if (s->iop.replace_collision)
+		bch_mark_cache_miss_collision(s->iop.c, s->d);
+
+	if (s->iop.bio)
+		bio_free_pages(s->iop.bio);
+
+	cached_dev_bio_complete(cl);
+	closure_put(&d->cl);
 }
 
 static void cached_dev_read_done(struct closure *cl)
@@ -832,6 +844,7 @@ static void cached_dev_read_done(struct closure *cl)
 	if (verify(dc) && s->recoverable && !s->read_dirty_data)
 		bch_data_verify(dc, s->orig_bio);
 
+	closure_get(&dc->disk.cl);
 	bio_complete(s);
 
 	if (s->iop.bio &&
@@ -877,7 +890,7 @@ static int cached_dev_cache_miss(struct btree *b, struct search *s,
 	}
 
 	if (!(bio->bi_opf & REQ_RAHEAD) &&
-	    !(bio->bi_opf & REQ_PRIO) &&
+	    !(bio->bi_opf & (REQ_META|REQ_PRIO)) &&
 	    s->iop.c->gc_stats.in_use < CUTOFF_CACHE_READA)
 		reada = min_t(sector_t, dc->readahead >> 9,
 			      get_capacity(bio->bi_disk) - bio_end_sector(bio));
@@ -1148,8 +1161,7 @@ static void quit_max_writeback_rate(struct cache_set *c,
 
 /* Cached devices - read & write stuff */
 
-static blk_qc_t cached_dev_make_request(struct request_queue *q,
-					struct bio *bio)
+blk_qc_t cached_dev_make_request(struct request_queue *q, struct bio *bio)
 {
 	struct search *s;
 	struct bcache_device *d = bio->bi_disk->private_data;
@@ -1253,7 +1265,6 @@ void bch_cached_dev_request_init(struct cached_dev *dc)
 {
 	struct gendisk *g = dc->disk.disk;
 
-	g->queue->make_request_fn		= cached_dev_make_request;
 	g->queue->backing_dev_info->congested_fn = cached_dev_congested;
 	dc->disk.cache_miss			= cached_dev_cache_miss;
 	dc->disk.ioctl				= cached_dev_ioctl;
@@ -1288,8 +1299,7 @@ static void flash_dev_nodata(struct closure *cl)
 	continue_at(cl, search_free, NULL);
 }
 
-static blk_qc_t flash_dev_make_request(struct request_queue *q,
-					     struct bio *bio)
+blk_qc_t flash_dev_make_request(struct request_queue *q, struct bio *bio)
 {
 	struct search *s;
 	struct closure *cl;

@@ -1,23 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * Read-Copy Update mechanism for mutual exclusion, the Bloatwatch edition.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, you can access it online at
- * http://www.gnu.org/licenses/gpl-2.0.html.
- *
  * Copyright IBM Corporation, 2008
  *
- * Author: Paul E. McKenney <paulmck@linux.vnet.ibm.com>
+ * Author: Paul E. McKenney <paulmck@linux.ibm.com>
  *
  * For detailed explanation of Read-Copy Update mechanism see -
  *		Documentation/RCU
@@ -25,7 +12,7 @@
 #ifndef __LINUX_TINY_H
 #define __LINUX_TINY_H
 
-#include <linux/ktime.h>
+#include <asm/param.h> /* for HZ */
 
 /* Never flag non-existent other CPUs! */
 static inline bool rcu_eqs_special_set(int cpu) { return false; }
@@ -96,7 +83,10 @@ void rcu_scheduler_starting(void);
 static inline void rcu_scheduler_starting(void) { }
 #endif /* #else #ifndef CONFIG_SRCU */
 static inline void rcu_end_inkernel_boot(void) { }
+static inline bool rcu_inkernel_boot_has_ended(void) { return true; }
 static inline bool rcu_is_watching(void) { return true; }
+static inline void rcu_momentary_dyntick_idle(void) { }
+static inline void kfree_rcu_scheduler_running(void) { }
 
 /* Avoid RCU read-side critical sections leaking across. */
 static inline void rcu_all_qs(void) { barrier(); }

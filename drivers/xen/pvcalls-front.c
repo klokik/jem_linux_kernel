@@ -1,15 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * (c) 2017 Stefano Stabellini <stefano@aporeto.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/module.h>
@@ -377,12 +368,12 @@ out:
 	return -ENOMEM;
 }
 
-static int create_active(struct sock_mapping *map, int *evtchn)
+static int create_active(struct sock_mapping *map, evtchn_port_t *evtchn)
 {
 	void *bytes;
 	int ret = -ENOMEM, irq = -1, i;
 
-	*evtchn = -1;
+	*evtchn = 0;
 	init_waitqueue_head(&map->active.inflight_conn_req);
 
 	bytes = map->active.data.in;
@@ -413,7 +404,7 @@ static int create_active(struct sock_mapping *map, int *evtchn)
 	return 0;
 
 out_error:
-	if (*evtchn >= 0)
+	if (*evtchn > 0)
 		xenbus_free_evtchn(pvcalls_front_dev, *evtchn);
 	return ret;
 }
@@ -424,7 +415,8 @@ int pvcalls_front_connect(struct socket *sock, struct sockaddr *addr,
 	struct pvcalls_bedata *bedata;
 	struct sock_mapping *map = NULL;
 	struct xen_pvcalls_request *req;
-	int notify, req_id, ret, evtchn;
+	int notify, req_id, ret;
+	evtchn_port_t evtchn;
 
 	if (addr->sa_family != AF_INET || sock->type != SOCK_STREAM)
 		return -EOPNOTSUPP;
@@ -540,7 +532,6 @@ out:
 int pvcalls_front_sendmsg(struct socket *sock, struct msghdr *msg,
 			  size_t len)
 {
-	struct pvcalls_bedata *bedata;
 	struct sock_mapping *map;
 	int sent, tot_sent = 0;
 	int count = 0, flags;
@@ -552,7 +543,6 @@ int pvcalls_front_sendmsg(struct socket *sock, struct msghdr *msg,
 	map = pvcalls_enter_sock(sock);
 	if (IS_ERR(map))
 		return PTR_ERR(map);
-	bedata = dev_get_drvdata(&pvcalls_front_dev->dev);
 
 	mutex_lock(&map->active.out_mutex);
 	if ((flags & MSG_DONTWAIT) && !pvcalls_front_write_todo(map)) {
@@ -635,7 +625,6 @@ out:
 int pvcalls_front_recvmsg(struct socket *sock, struct msghdr *msg, size_t len,
 		     int flags)
 {
-	struct pvcalls_bedata *bedata;
 	int ret;
 	struct sock_mapping *map;
 
@@ -645,7 +634,6 @@ int pvcalls_front_recvmsg(struct socket *sock, struct msghdr *msg, size_t len,
 	map = pvcalls_enter_sock(sock);
 	if (IS_ERR(map))
 		return PTR_ERR(map);
-	bedata = dev_get_drvdata(&pvcalls_front_dev->dev);
 
 	mutex_lock(&map->active.in_mutex);
 	if (len > XEN_FLEX_RING_SIZE(PVCALLS_RING_ORDER))
@@ -778,7 +766,8 @@ int pvcalls_front_accept(struct socket *sock, struct socket *newsock, int flags)
 	struct sock_mapping *map;
 	struct sock_mapping *map2 = NULL;
 	struct xen_pvcalls_request *req;
-	int notify, req_id, ret, evtchn, nonblock;
+	int notify, req_id, ret, nonblock;
+	evtchn_port_t evtchn;
 
 	map = pvcalls_enter_sock(sock);
 	if (IS_ERR(map))
@@ -1138,7 +1127,8 @@ static int pvcalls_front_remove(struct xenbus_device *dev)
 static int pvcalls_front_probe(struct xenbus_device *dev,
 			  const struct xenbus_device_id *id)
 {
-	int ret = -ENOMEM, evtchn, i;
+	int ret = -ENOMEM, i;
+	evtchn_port_t evtchn;
 	unsigned int max_page_order, function_calls, len;
 	char *versions;
 	grant_ref_t gref_head = 0;

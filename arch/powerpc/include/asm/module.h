@@ -1,32 +1,11 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef _ASM_POWERPC_MODULE_H
 #define _ASM_POWERPC_MODULE_H
 #ifdef __KERNEL__
 
-/*
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
- */
-
 #include <linux/list.h>
 #include <asm/bug.h>
 #include <asm-generic/module.h>
-
-
-#ifdef CONFIG_MPROFILE_KERNEL
-#define MODULE_ARCH_VERMAGIC_FTRACE	"mprofile-kernel "
-#else
-#define MODULE_ARCH_VERMAGIC_FTRACE	""
-#endif
-
-#ifdef CONFIG_RELOCATABLE
-#define MODULE_ARCH_VERMAGIC_RELOCATABLE	"relocatable "
-#else
-#define MODULE_ARCH_VERMAGIC_RELOCATABLE	""
-#endif
-
-#define MODULE_ARCH_VERMAGIC MODULE_ARCH_VERMAGIC_FTRACE MODULE_ARCH_VERMAGIC_RELOCATABLE
 
 #ifndef __powerpc64__
 /*

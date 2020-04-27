@@ -30,6 +30,7 @@
 #define NAND_MFR_SAMSUNG	0xec
 #define NAND_MFR_SANDISK	0x45
 #define NAND_MFR_STMICRO	0x20
+/* Kioxia is new name of Toshiba memory. */
 #define NAND_MFR_TOSHIBA	0x98
 #define NAND_MFR_WINBOND	0xef
 
@@ -76,6 +77,7 @@ extern const struct nand_manufacturer_ops toshiba_nand_manuf_ops;
 
 /* Core functions */
 const struct nand_manufacturer *nand_get_manufacturer(u8 id);
+int nand_bbm_get_next_page(struct nand_chip *chip, int page);
 int nand_markbad_bbm(struct nand_chip *chip, loff_t ofs);
 int nand_erase_nand(struct nand_chip *chip, struct erase_info *instr,
 		    int allowbbt);
@@ -110,7 +112,7 @@ static inline int nand_exec_op(struct nand_chip *chip,
 	if (!nand_has_exec_op(chip))
 		return -ENOTSUPP;
 
-	if (WARN_ON(op->cs >= chip->numchips))
+	if (WARN_ON(op->cs >= nanddev_ntargets(&chip->base)))
 		return -EINVAL;
 
 	return chip->controller->ops->exec_op(chip, op, false);

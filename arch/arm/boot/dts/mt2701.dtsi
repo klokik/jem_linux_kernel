@@ -12,10 +12,11 @@
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 #include <dt-bindings/memory/mt2701-larb-port.h>
 #include <dt-bindings/reset/mt2701-resets.h>
-#include "skeleton64.dtsi"
 #include "mt2701-pinfunc.h"
 
 / {
+	#address-cells = <2>;
+	#size-cells = <2>;
 	compatible = "mediatek,mt2701";
 	interrupt-parent = <&cirq>;
 
@@ -147,7 +148,7 @@
 		reg = <0 0x10005000 0 0x1000>;
 	};
 
-	scpsys: scpsys@10006000 {
+	scpsys: power-controller@10006000 {
 		compatible = "mediatek,mt2701-scpsys", "syscon";
 		#power-domain-cells = <1>;
 		reg = <0 0x10006000 0 0x1000>;

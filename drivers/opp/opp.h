@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Generic OPP Interface
  *
@@ -5,10 +6,6 @@
  *	Nishanth Menon
  *	Romit Dasgupta
  *	Kevin Hilman
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef __DRIVER_OPP_H__
@@ -60,6 +57,7 @@ extern struct list_head opp_tables;
  * @suspend:	true if suspend OPP
  * @pstate: Device's power domain's performance state.
  * @rate:	Frequency in hertz
+ * @level:	Performance level
  * @supplies:	Power supplies voltage/current values
  * @clock_latency_ns: Latency (in nanoseconds) of switching to this OPP's
  *		frequency from any other OPP's frequency.
@@ -80,6 +78,7 @@ struct dev_pm_opp {
 	bool suspend;
 	unsigned int pstate;
 	unsigned long rate;
+	unsigned int level;
 
 	struct dev_pm_opp_supply *supplies;
 
@@ -128,11 +127,10 @@ enum opp_table_access {
  * @dev_list:	list of devices that share these OPPs
  * @opp_list:	table of opps
  * @kref:	for reference count of the table.
- * @list_kref:	for reference count of the OPP list.
  * @lock:	mutex protecting the opp_list and dev_list.
  * @np:		struct device_node pointer for opp's DT node.
  * @clock_latency_ns_max: Max clock latency in nanoseconds.
- * @parsed_static_opps: True if OPPs are initialized from DT.
+ * @parsed_static_opps: Count of devices for which OPPs are initialized from DT.
  * @shared_opp: OPP is shared between multiple devices.
  * @suspend_opp: Pointer to OPP to be used during device suspend.
  * @genpd_virt_dev_lock: Mutex protecting the genpd virtual device pointers.
@@ -168,7 +166,6 @@ struct opp_table {
 	struct list_head dev_list;
 	struct list_head opp_list;
 	struct kref kref;
-	struct kref list_kref;
 	struct mutex lock;
 
 	struct device_node *np;
@@ -177,7 +174,7 @@ struct opp_table {
 	/* For backward compatibility with v1 bindings */
 	unsigned int voltage_tolerance_v1;
 
-	bool parsed_static_opps;
+	unsigned int parsed_static_opps;
 	enum opp_table_access shared_opp;
 	struct dev_pm_opp *suspend_opp;
 
@@ -236,18 +233,17 @@ static inline void _of_opp_free_required_opps(struct opp_table *opp_table,
 
 #ifdef CONFIG_DEBUG_FS
 void opp_debug_remove_one(struct dev_pm_opp *opp);
-int opp_debug_create_one(struct dev_pm_opp *opp, struct opp_table *opp_table);
-int opp_debug_register(struct opp_device *opp_dev, struct opp_table *opp_table);
+void opp_debug_create_one(struct dev_pm_opp *opp, struct opp_table *opp_table);
+void opp_debug_register(struct opp_device *opp_dev, struct opp_table *opp_table);
 void opp_debug_unregister(struct opp_device *opp_dev, struct opp_table *opp_table);
 #else
 static inline void opp_debug_remove_one(struct dev_pm_opp *opp) {}
 
-static inline int opp_debug_create_one(struct dev_pm_opp *opp,
-				       struct opp_table *opp_table)
-{ return 0; }
-static inline int opp_debug_register(struct opp_device *opp_dev,
-				     struct opp_table *opp_table)
-{ return 0; }
+static inline void opp_debug_create_one(struct dev_pm_opp *opp,
+					struct opp_table *opp_table) { }
+
+static inline void opp_debug_register(struct opp_device *opp_dev,
+				      struct opp_table *opp_table) { }
 
 static inline void opp_debug_unregister(struct opp_device *opp_dev,
 					struct opp_table *opp_table)

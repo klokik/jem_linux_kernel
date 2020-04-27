@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * OpenRISC traps.c
  *
@@ -9,15 +10,9 @@
  * Copyright (C) 2003 Matjaz Breskvar <phoenix@bsemi.com>
  * Copyright (C) 2010-2011 Jonas Bonn <jonas@southpole.se>
  *
- *      This program is free software; you can redistribute it and/or
- *      modify it under the terms of the GNU General Public License
- *      as published by the Free Software Foundation; either version
- *      2 of the License, or (at your option) any later version.
- *
  *  Here we handle the break vectors not used by the system call
  *  mechanism, as well as some general stack/register dumping
  *  things.
- *
  */
 
 #include <linux/init.h>
@@ -35,7 +30,6 @@
 #include <linux/kallsyms.h>
 #include <linux/uaccess.h>
 
-#include <asm/segment.h>
 #include <asm/io.h>
 #include <asm/pgtable.h>
 #include <asm/unwinder.h>
@@ -59,13 +53,6 @@ void show_stack(struct task_struct *task, unsigned long *esp)
 
 	pr_emerg("Call trace:\n");
 	unwind_stack(NULL, esp, print_trace);
-}
-
-void show_trace_task(struct task_struct *tsk)
-{
-	/*
-	 * TODO: SysRq-T trace dump...
-	 */
 }
 
 void show_registers(struct pt_regs *regs)
@@ -250,7 +237,7 @@ void __init trap_init(void)
 
 asmlinkage void do_trap(struct pt_regs *regs, unsigned long address)
 {
-	force_sig_fault(SIGTRAP, TRAP_TRACE, (void __user *)address, current);
+	force_sig_fault(SIGTRAP, TRAP_TRACE, (void __user *)address);
 
 	regs->pc += 4;
 }
@@ -259,7 +246,7 @@ asmlinkage void do_unaligned_access(struct pt_regs *regs, unsigned long address)
 {
 	if (user_mode(regs)) {
 		/* Send a SIGBUS */
-		force_sig_fault(SIGBUS, BUS_ADRALN, (void __user *)address, current);
+		force_sig_fault(SIGBUS, BUS_ADRALN, (void __user *)address);
 	} else {
 		printk("KERNEL: Unaligned Access 0x%.8lx\n", address);
 		show_registers(regs);
@@ -272,7 +259,7 @@ asmlinkage void do_bus_fault(struct pt_regs *regs, unsigned long address)
 {
 	if (user_mode(regs)) {
 		/* Send a SIGBUS */
-		force_sig_fault(SIGBUS, BUS_ADRERR, (void __user *)address, current);
+		force_sig_fault(SIGBUS, BUS_ADRERR, (void __user *)address);
 	} else {		/* Kernel mode */
 		printk("KERNEL: Bus error (SIGBUS) 0x%.8lx\n", address);
 		show_registers(regs);
@@ -377,7 +364,7 @@ static inline void simulate_lwa(struct pt_regs *regs, unsigned long address,
 
 	if (get_user(value, lwa_addr)) {
 		if (user_mode(regs)) {
-			force_sig(SIGSEGV, current);
+			force_sig(SIGSEGV);
 			return;
 		}
 
@@ -424,7 +411,7 @@ static inline void simulate_swa(struct pt_regs *regs, unsigned long address,
 
 	if (put_user(regs->gpr[rb], vaddr)) {
 		if (user_mode(regs)) {
-			force_sig(SIGSEGV, current);
+			force_sig(SIGSEGV);
 			return;
 		}
 
@@ -467,7 +454,7 @@ asmlinkage void do_illegal_instruction(struct pt_regs *regs,
 
 	if (user_mode(regs)) {
 		/* Send a SIGILL */
-		force_sig_fault(SIGILL, ILL_ILLOPC, (void __user *)address, current);
+		force_sig_fault(SIGILL, ILL_ILLOPC, (void __user *)address);
 	} else {		/* Kernel mode */
 		printk("KERNEL: Illegal instruction (SIGILL) 0x%.8lx\n",
 		       address);

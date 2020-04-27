@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2002-2005, Instant802 Networks, Inc.
  * Copyright 2005-2006, Devicescape Software, Inc.
@@ -5,11 +6,7 @@
  * Copyright 2007-2010	Johannes Berg <johannes@sipsolutions.net>
  * Copyright 2013-2014  Intel Mobile Communications GmbH
  * Copyright(c) 2015 - 2017 Intel Deutschland GmbH
- * Copyright (C) 2018 Intel Corporation
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
+ * Copyright (C) 2018-2020 Intel Corporation
  */
 
 #include <linux/jiffies.h>
@@ -208,7 +205,24 @@ ieee80211_rx_radiotap_hdrlen(struct ieee80211_local *local,
 	}
 
 	if (status->flag & RX_FLAG_RADIOTAP_VENDOR_DATA) {
-		struct ieee80211_vendor_radiotap *rtap = (void *)skb->data;
+		struct ieee80211_vendor_radiotap *rtap;
+		int vendor_data_offset = 0;
+
+		/*
+		 * The position to look at depends on the existence (or non-
+		 * existence) of other elements, so take that into account...
+		 */
+		if (status->flag & RX_FLAG_RADIOTAP_HE)
+			vendor_data_offset +=
+				sizeof(struct ieee80211_radiotap_he);
+		if (status->flag & RX_FLAG_RADIOTAP_HE_MU)
+			vendor_data_offset +=
+				sizeof(struct ieee80211_radiotap_he_mu);
+		if (status->flag & RX_FLAG_RADIOTAP_LSIG)
+			vendor_data_offset +=
+				sizeof(struct ieee80211_radiotap_lsig);
+
+		rtap = (void *)&skb->data[vendor_data_offset];
 
 		/* alignment for fixed 6-byte vendor data header */
 		len = ALIGN(len, 2);
@@ -969,7 +983,8 @@ static int ieee80211_get_mmie_keyidx(struct sk_buff *skb)
 	if (skb->len < 24 + sizeof(*mmie) || !is_multicast_ether_addr(hdr->da))
 		return -1;
 
-	if (!ieee80211_is_robust_mgmt_frame(skb))
+	if (!ieee80211_is_robust_mgmt_frame(skb) &&
+	    !ieee80211_is_beacon(hdr->frame_control))
 		return -1; /* not a robust management frame */
 
 	mmie = (struct ieee80211_mmie *)
@@ -988,23 +1003,43 @@ static int ieee80211_get_mmie_keyidx(struct sk_buff *skb)
 	return -1;
 }
 
-static int ieee80211_get_cs_keyid(const struct ieee80211_cipher_scheme *cs,
-				  struct sk_buff *skb)
+static int ieee80211_get_keyid(struct sk_buff *skb,
+			       const struct ieee80211_cipher_scheme *cs)
 {
 	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
 	__le16 fc;
 	int hdrlen;
+	int minlen;
+	u8 key_idx_off;
+	u8 key_idx_shift;
 	u8 keyid;
 
 	fc = hdr->frame_control;
 	hdrlen = ieee80211_hdrlen(fc);
 
-	if (skb->len < hdrlen + cs->hdr_len)
+	if (cs) {
+		minlen = hdrlen + cs->hdr_len;
+		key_idx_off = hdrlen + cs->key_idx_off;
+		key_idx_shift = cs->key_idx_shift;
+	} else {
+		/* WEP, TKIP, CCMP and GCMP */
+		minlen = hdrlen + IEEE80211_WEP_IV_LEN;
+		key_idx_off = hdrlen + 3;
+		key_idx_shift = 6;
+	}
+
+	if (unlikely(skb->len < minlen))
 		return -EINVAL;
 
-	skb_copy_bits(skb, hdrlen + cs->key_idx_off, &keyid, 1);
-	keyid &= cs->key_idx_mask;
-	keyid >>= cs->key_idx_shift;
+	skb_copy_bits(skb, key_idx_off, &keyid, 1);
+
+	if (cs)
+		keyid &= cs->key_idx_mask;
+	keyid >>= key_idx_shift;
+
+	/* cs could use more than the usual two bits for the keyid */
+	if (unlikely(keyid >= NUM_DEFAULT_KEYS))
+		return -EINVAL;
 
 	return keyid;
 }
@@ -1416,8 +1451,7 @@ ieee80211_rx_h_check_dup(struct ieee80211_rx_data *rx)
 		return RX_CONTINUE;
 
 	if (ieee80211_is_ctl(hdr->frame_control) ||
-	    ieee80211_is_nullfunc(hdr->frame_control) ||
-	    ieee80211_is_qos_nullfunc(hdr->frame_control) ||
+	    ieee80211_is_any_nullfunc(hdr->frame_control) ||
 	    is_multicast_ether_addr(hdr->addr1))
 		return RX_CONTINUE;
 
@@ -1551,7 +1585,15 @@ static void sta_ps_start(struct sta_info *sta)
 		return;
 
 	for (tid = 0; tid < IEEE80211_NUM_TIDS; tid++) {
-		if (txq_has_queue(sta->sta.txq[tid]))
+		struct ieee80211_txq *txq = sta->sta.txq[tid];
+		struct txq_info *txqi = to_txq_info(txq);
+
+		spin_lock(&local->active_txq_lock[txq->ac]);
+		if (!list_empty(&txqi->schedule_order))
+			list_del_init(&txqi->schedule_order);
+		spin_unlock(&local->active_txq_lock[txq->ac]);
+
+		if (txq_has_queue(txq))
 			set_bit(tid, &sta->txq_buffered_tids);
 		else
 			clear_bit(tid, &sta->txq_buffered_tids);
@@ -1796,8 +1838,7 @@ ieee80211_rx_h_sta_process(struct ieee80211_rx_data *rx)
 	 * Drop (qos-)data::nullfunc frames silently, since they
 	 * are used only to control station power saving mode.
 	 */
-	if (ieee80211_is_nullfunc(hdr->frame_control) ||
-	    ieee80211_is_qos_nullfunc(hdr->frame_control)) {
+	if (ieee80211_is_any_nullfunc(hdr->frame_control)) {
 		I802_DEBUG_INC(rx->local->rx_handlers_drop_nullfunc);
 
 		/*
@@ -1828,6 +1869,41 @@ ieee80211_rx_h_sta_process(struct ieee80211_rx_data *rx)
 	return RX_CONTINUE;
 } /* ieee80211_rx_h_sta_process */
 
+static struct ieee80211_key *
+ieee80211_rx_get_bigtk(struct ieee80211_rx_data *rx, int idx)
+{
+	struct ieee80211_key *key = NULL;
+	struct ieee80211_sub_if_data *sdata = rx->sdata;
+	int idx2;
+
+	/* Make sure key gets set if either BIGTK key index is set so that
+	 * ieee80211_drop_unencrypted_mgmt() can properly drop both unprotected
+	 * Beacon frames and Beacon frames that claim to use another BIGTK key
+	 * index (i.e., a key that we do not have).
+	 */
+
+	if (idx < 0) {
+		idx = NUM_DEFAULT_KEYS + NUM_DEFAULT_MGMT_KEYS;
+		idx2 = idx + 1;
+	} else {
+		if (idx == NUM_DEFAULT_KEYS + NUM_DEFAULT_MGMT_KEYS)
+			idx2 = idx + 1;
+		else
+			idx2 = idx - 1;
+	}
+
+	if (rx->sta)
+		key = rcu_dereference(rx->sta->gtk[idx]);
+	if (!key)
+		key = rcu_dereference(sdata->keys[idx]);
+	if (!key && rx->sta)
+		key = rcu_dereference(rx->sta->gtk[idx2]);
+	if (!key)
+		key = rcu_dereference(sdata->keys[idx2]);
+
+	return key;
+}
+
 static ieee80211_rx_result debug_noinline
 ieee80211_rx_h_decrypt(struct ieee80211_rx_data *rx)
 {
@@ -1835,9 +1911,9 @@ ieee80211_rx_h_decrypt(struct ieee80211_rx_data *rx)
 	struct ieee80211_rx_status *status = IEEE80211_SKB_RXCB(skb);
 	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
 	int keyidx;
-	int hdrlen;
 	ieee80211_rx_result result = RX_DROP_UNUSABLE;
 	struct ieee80211_key *sta_ptk = NULL;
+	struct ieee80211_key *ptk_idx = NULL;
 	int mmie_keyidx = -1;
 	__le16 fc;
 	const struct ieee80211_cipher_scheme *cs = NULL;
@@ -1845,17 +1921,18 @@ ieee80211_rx_h_decrypt(struct ieee80211_rx_data *rx)
 	/*
 	 * Key selection 101
 	 *
-	 * There are four types of keys:
+	 * There are five types of keys:
 	 *  - GTK (group keys)
 	 *  - IGTK (group keys for management frames)
+	 *  - BIGTK (group keys for Beacon frames)
 	 *  - PTK (pairwise keys)
 	 *  - STK (station-to-station pairwise keys)
 	 *
 	 * When selecting a key, we have to distinguish between multicast
 	 * (including broadcast) and unicast frames, the latter can only
-	 * use PTKs and STKs while the former always use GTKs and IGTKs.
-	 * Unless, of course, actual WEP keys ("pre-RSNA") are used, then
-	 * unicast frames can also use key indices like GTKs. Hence, if we
+	 * use PTKs and STKs while the former always use GTKs, IGTKs, and
+	 * BIGTKs. Unless, of course, actual WEP keys ("pre-RSNA") are used,
+	 * then unicast frames can also use key indices like GTKs. Hence, if we
 	 * don't have a PTK/STK we check the key index for a WEP key.
 	 *
 	 * Note that in a regular BSS, multicast frames are sent by the
@@ -1875,27 +1952,44 @@ ieee80211_rx_h_decrypt(struct ieee80211_rx_data *rx)
 
 	if (rx->sta) {
 		int keyid = rx->sta->ptk_idx;
+		sta_ptk = rcu_dereference(rx->sta->ptk[keyid]);
 
-		if (ieee80211_has_protected(fc) && rx->sta->cipher_scheme) {
+		if (ieee80211_has_protected(fc)) {
 			cs = rx->sta->cipher_scheme;
-			keyid = ieee80211_get_cs_keyid(cs, rx->skb);
+			keyid = ieee80211_get_keyid(rx->skb, cs);
+
 			if (unlikely(keyid < 0))
 				return RX_DROP_UNUSABLE;
+
+			ptk_idx = rcu_dereference(rx->sta->ptk[keyid]);
 		}
-		sta_ptk = rcu_dereference(rx->sta->ptk[keyid]);
 	}
 
 	if (!ieee80211_has_protected(fc))
 		mmie_keyidx = ieee80211_get_mmie_keyidx(rx->skb);
 
 	if (!is_multicast_ether_addr(hdr->addr1) && sta_ptk) {
-		rx->key = sta_ptk;
+		rx->key = ptk_idx ? ptk_idx : sta_ptk;
 		if ((status->flag & RX_FLAG_DECRYPTED) &&
 		    (status->flag & RX_FLAG_IV_STRIPPED))
 			return RX_CONTINUE;
 		/* Skip decryption if the frame is not protected. */
 		if (!ieee80211_has_protected(fc))
 			return RX_CONTINUE;
+	} else if (mmie_keyidx >= 0 && ieee80211_is_beacon(fc)) {
+		/* Broadcast/multicast robust management frame / BIP */
+		if ((status->flag & RX_FLAG_DECRYPTED) &&
+		    (status->flag & RX_FLAG_IV_STRIPPED))
+			return RX_CONTINUE;
+
+		if (mmie_keyidx < NUM_DEFAULT_KEYS + NUM_DEFAULT_MGMT_KEYS ||
+		    mmie_keyidx >= NUM_DEFAULT_KEYS + NUM_DEFAULT_MGMT_KEYS +
+		    NUM_DEFAULT_BEACON_KEYS)
+			return RX_DROP_MONITOR; /* unexpected BIP keyidx */
+
+		rx->key = ieee80211_rx_get_bigtk(rx, mmie_keyidx);
+		if (!rx->key)
+			return RX_CONTINUE; /* Beacon protection not in use */
 	} else if (mmie_keyidx >= 0) {
 		/* Broadcast/multicast robust management frame / BIP */
 		if ((status->flag & RX_FLAG_DECRYPTED) &&
@@ -1925,11 +2019,12 @@ ieee80211_rx_h_decrypt(struct ieee80211_rx_data *rx)
 		struct ieee80211_sub_if_data *sdata = rx->sdata;
 		int i;
 
-		if (ieee80211_is_mgmt(fc) &&
-		    is_multicast_ether_addr(hdr->addr1) &&
-		    (key = rcu_dereference(rx->sdata->default_mgmt_key)))
-			rx->key = key;
-		else {
+		if (ieee80211_is_beacon(fc)) {
+			key = ieee80211_rx_get_bigtk(rx, -1);
+		} else if (ieee80211_is_mgmt(fc) &&
+			   is_multicast_ether_addr(hdr->addr1)) {
+			key = rcu_dereference(rx->sdata->default_mgmt_key);
+		} else {
 			if (rx->sta) {
 				for (i = 0; i < NUM_DEFAULT_KEYS; i++) {
 					key = rcu_dereference(rx->sta->gtk[i]);
@@ -1944,13 +2039,11 @@ ieee80211_rx_h_decrypt(struct ieee80211_rx_data *rx)
 						break;
 				}
 			}
-			if (key)
-				rx->key = key;
 		}
+		if (key)
+			rx->key = key;
 		return RX_CONTINUE;
 	} else {
-		u8 keyid;
-
 		/*
 		 * The device doesn't give us the IV so we won't be
 		 * able to look up the key. That's ok though, we
@@ -1964,23 +2057,10 @@ ieee80211_rx_h_decrypt(struct ieee80211_rx_data *rx)
 		    (status->flag & RX_FLAG_IV_STRIPPED))
 			return RX_CONTINUE;
 
-		hdrlen = ieee80211_hdrlen(fc);
+		keyidx = ieee80211_get_keyid(rx->skb, cs);
 
-		if (cs) {
-			keyidx = ieee80211_get_cs_keyid(cs, rx->skb);
-
-			if (unlikely(keyidx < 0))
-				return RX_DROP_UNUSABLE;
-		} else {
-			if (rx->skb->len < 8 + hdrlen)
-				return RX_DROP_UNUSABLE; /* TODO: count this? */
-			/*
-			 * no need to call ieee80211_wep_get_keyidx,
-			 * it verifies a bunch of things we've done already
-			 */
-			skb_copy_bits(rx->skb, hdrlen + 3, &keyid, 1);
-			keyidx = keyid >> 6;
-		}
+		if (unlikely(keyidx < 0))
+			return RX_DROP_UNUSABLE;
 
 		/* check per-station GTK first, if multicast packet */
 		if (is_multicast_ether_addr(hdr->addr1) && rx->sta)
@@ -2289,7 +2369,7 @@ static int ieee80211_drop_unencrypted(struct ieee80211_rx_data *rx, __le16 fc)
 
 	/* Drop unencrypted frames if key is set. */
 	if (unlikely(!ieee80211_has_protected(fc) &&
-		     !ieee80211_is_nullfunc(fc) &&
+		     !ieee80211_is_any_nullfunc(fc) &&
 		     ieee80211_is_data(fc) && rx->key))
 		return -EACCES;
 
@@ -2330,6 +2410,9 @@ static int ieee80211_drop_unencrypted_mgmt(struct ieee80211_rx_data *rx)
 							     rx->skb->len);
 			return -EACCES;
 		}
+		if (unlikely(ieee80211_is_beacon(fc) && rx->key &&
+			     ieee80211_get_mmie_keyidx(rx->skb) < 0))
+			return -EACCES;
 		/*
 		 * When using MFP, Action frames are not allowed prior to
 		 * having configured keys.
@@ -2414,14 +2497,17 @@ static void ieee80211_deliver_skb_to_local_stack(struct sk_buff *skb,
 	struct net_device *dev = sdata->dev;
 
 	if (unlikely((skb->protocol == sdata->control_port_protocol ||
-		      skb->protocol == cpu_to_be16(ETH_P_PREAUTH)) &&
+		     (skb->protocol == cpu_to_be16(ETH_P_PREAUTH) &&
+		      !sdata->control_port_no_preauth)) &&
 		     sdata->control_port_over_nl80211)) {
 		struct ieee80211_rx_status *status = IEEE80211_SKB_RXCB(skb);
-		bool noencrypt = status->flag & RX_FLAG_DECRYPTED;
+		bool noencrypt = !(status->flag & RX_FLAG_DECRYPTED);
 
 		cfg80211_rx_control_port(dev, skb, noencrypt);
 		dev_kfree_skb(skb);
 	} else {
+		memset(skb->cb, 0, sizeof(skb->cb));
+
 		/* deliver to local stack */
 		if (rx->napi)
 			napi_gro_receive(rx->napi, skb);
@@ -2516,8 +2602,6 @@ ieee80211_deliver_skb(struct ieee80211_rx_data *rx)
 
 	if (skb) {
 		skb->protocol = eth_type_trans(skb, dev);
-		memset(skb->cb, 0, sizeof(skb->cb));
-
 		ieee80211_deliver_skb_to_local_stack(skb, rx);
 	}
 
@@ -3054,6 +3138,10 @@ ieee80211_rx_h_action(struct ieee80211_rx_data *rx)
 			enum ieee80211_smps_mode smps_mode;
 			struct sta_opmode_info sta_opmode = {};
 
+			if (sdata->vif.type != NL80211_IFTYPE_AP &&
+			    sdata->vif.type != NL80211_IFTYPE_AP_VLAN)
+				goto handled;
+
 			/* convert to HT capability */
 			switch (mgmt->u.action.u.ht_smps.smps_control) {
 			case WLAN_HT_SMPS_CONTROL_DISABLED:
@@ -3437,9 +3525,18 @@ ieee80211_rx_h_mgmt(struct ieee80211_rx_data *rx)
 	case cpu_to_le16(IEEE80211_STYPE_PROBE_RESP):
 		/* process for all: mesh, mlme, ibss */
 		break;
+	case cpu_to_le16(IEEE80211_STYPE_DEAUTH):
+		if (is_multicast_ether_addr(mgmt->da) &&
+		    !is_broadcast_ether_addr(mgmt->da))
+			return RX_DROP_MONITOR;
+
+		/* process only for station/IBSS */
+		if (sdata->vif.type != NL80211_IFTYPE_STATION &&
+		    sdata->vif.type != NL80211_IFTYPE_ADHOC)
+			return RX_DROP_MONITOR;
+		break;
 	case cpu_to_le16(IEEE80211_STYPE_ASSOC_RESP):
 	case cpu_to_le16(IEEE80211_STYPE_REASSOC_RESP):
-	case cpu_to_le16(IEEE80211_STYPE_DEAUTH):
 	case cpu_to_le16(IEEE80211_STYPE_DISASSOC):
 		if (is_multicast_ether_addr(mgmt->da) &&
 		    !is_broadcast_ether_addr(mgmt->da))
@@ -3798,6 +3895,8 @@ static bool ieee80211_accept_frame(struct ieee80211_rx_data *rx)
 	case NL80211_IFTYPE_STATION:
 		if (!bssid && !sdata->u.mgd.use_4addr)
 			return false;
+		if (ieee80211_is_robust_mgmt_frame(skb) && !rx->sta)
+			return false;
 		if (multicast)
 			return true;
 		return ether_addr_equal(sdata->vif.addr, hdr->addr1);
@@ -4025,12 +4124,8 @@ void ieee80211_check_fast_rx(struct sta_info *sta)
 		case WLAN_CIPHER_SUITE_GCMP_256:
 			break;
 		default:
-			/* we also don't want to deal with WEP or cipher scheme
-			 * since those require looking up the key idx in the
-			 * frame, rather than assuming the PTK is used
-			 * (we need to revisit this once we implement the real
-			 * PTK index, which is now valid in the spec, but we
-			 * haven't implemented that part yet)
+			/* We also don't want to deal with
+			 * WEP or cipher scheme.
 			 */
 			goto clear_rcu;
 		}
@@ -4077,7 +4172,7 @@ void __ieee80211_check_fast_rx_iface(struct ieee80211_sub_if_data *sdata)
 
 	lockdep_assert_held(&local->sta_mtx);
 
-	list_for_each_entry_rcu(sta, &local->sta_list, list) {
+	list_for_each_entry(sta, &local->sta_list, list) {
 		if (sdata != sta->sdata &&
 		    (!sta->sdata->bss || sta->sdata->bss != sdata->bss))
 			continue;

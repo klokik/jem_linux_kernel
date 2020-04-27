@@ -57,6 +57,12 @@
 #define VHOST_SCSI_PREALLOC_UPAGES 2048
 #define VHOST_SCSI_PREALLOC_PROT_SGLS 2048
 
+/* Max number of requests before requeueing the job.
+ * Using this limit prevents one virtqueue from starving others with
+ * request.
+ */
+#define VHOST_SCSI_WEIGHT 256
+
 struct vhost_scsi_inflight {
 	/* Wait for the flush operation to finish */
 	struct completion comp;
@@ -346,11 +352,6 @@ static int vhost_scsi_write_pending(struct se_cmd *se_cmd)
 	return 0;
 }
 
-static int vhost_scsi_write_pending_status(struct se_cmd *se_cmd)
-{
-	return 0;
-}
-
 static void vhost_scsi_set_default_node_attrs(struct se_node_acl *nacl)
 {
 	return;
@@ -451,7 +452,7 @@ vhost_scsi_do_evt_work(struct vhost_scsi *vs, struct vhost_scsi_evt *evt)
 	unsigned out, in;
 	int head, ret;
 
-	if (!vq->private_data) {
+	if (!vhost_vq_get_backend(vq)) {
 		vs->vs_events_missed = true;
 		return;
 	}
@@ -891,7 +892,7 @@ vhost_scsi_get_req(struct vhost_virtqueue *vq, struct vhost_scsi_ctx *vc,
 	} else {
 		struct vhost_scsi_tpg **vs_tpg, *tpg;
 
-		vs_tpg = vq->private_data;	/* validated at handler entry */
+		vs_tpg = vhost_vq_get_backend(vq);	/* validated at handler entry */
 
 		tpg = READ_ONCE(vs_tpg[*vc->target]);
 		if (unlikely(!tpg)) {
@@ -917,7 +918,7 @@ vhost_scsi_handle_vq(struct vhost_scsi *vs, struct vhost_virtqueue *vq)
 	struct iov_iter in_iter, prot_iter, data_iter;
 	u64 tag;
 	u32 exp_data_len, data_direction;
-	int ret, prot_bytes;
+	int ret, prot_bytes, c = 0;
 	u16 lun;
 	u8 task_attr;
 	bool t10_pi = vhost_has_feature(vq, VIRTIO_SCSI_F_T10_PI);
@@ -928,7 +929,7 @@ vhost_scsi_handle_vq(struct vhost_scsi *vs, struct vhost_virtqueue *vq)
 	 * We can handle the vq only after the endpoint is setup by calling the
 	 * VHOST_SCSI_SET_ENDPOINT ioctl.
 	 */
-	vs_tpg = vq->private_data;
+	vs_tpg = vhost_vq_get_backend(vq);
 	if (!vs_tpg)
 		goto out;
 
@@ -937,7 +938,7 @@ vhost_scsi_handle_vq(struct vhost_scsi *vs, struct vhost_virtqueue *vq)
 
 	vhost_disable_notify(&vs->dev, vq);
 
-	for (;;) {
+	do {
 		ret = vhost_scsi_get_desc(vs, vq, &vc);
 		if (ret)
 			goto err;
@@ -1117,7 +1118,7 @@ err:
 			break;
 		else if (ret == -EIO)
 			vhost_scsi_send_bad_target(vs, vq, vc.head, vc.out);
-	}
+	} while (likely(!vhost_exceeds_weight(vq, ++c, 0)));
 out:
 	mutex_unlock(&vq->mutex);
 }
@@ -1176,21 +1177,21 @@ vhost_scsi_ctl_handle_vq(struct vhost_scsi *vs, struct vhost_virtqueue *vq)
 	} v_req;
 	struct vhost_scsi_ctx vc;
 	size_t typ_size;
-	int ret;
+	int ret, c = 0;
 
 	mutex_lock(&vq->mutex);
 	/*
 	 * We can handle the vq only after the endpoint is setup by calling the
 	 * VHOST_SCSI_SET_ENDPOINT ioctl.
 	 */
-	if (!vq->private_data)
+	if (!vhost_vq_get_backend(vq))
 		goto out;
 
 	memset(&vc, 0, sizeof(vc));
 
 	vhost_disable_notify(&vs->dev, vq);
 
-	for (;;) {
+	do {
 		ret = vhost_scsi_get_desc(vs, vq, &vc);
 		if (ret)
 			goto err;
@@ -1269,7 +1270,7 @@ err:
 			break;
 		else if (ret == -EIO)
 			vhost_scsi_send_bad_target(vs, vq, vc.head, vc.out);
-	}
+	} while (likely(!vhost_exceeds_weight(vq, ++c, 0)));
 out:
 	mutex_unlock(&vq->mutex);
 }
@@ -1321,7 +1322,7 @@ static void vhost_scsi_evt_handle_kick(struct vhost_work *work)
 	struct vhost_scsi *vs = container_of(vq->dev, struct vhost_scsi, dev);
 
 	mutex_lock(&vq->mutex);
-	if (!vq->private_data)
+	if (!vhost_vq_get_backend(vq))
 		goto out;
 
 	if (vs->vs_events_missed)
@@ -1448,7 +1449,6 @@ vhost_scsi_set_endpoint(struct vhost_scsi *vs,
 			tpg->tv_tpg_vhost_count++;
 			tpg->vhost_scsi = vs;
 			vs_tpg[tpg->tport_tpgt] = tpg;
-			smp_mb__after_atomic();
 			match = true;
 		}
 		mutex_unlock(&tpg->tv_tpg_mutex);
@@ -1460,7 +1460,7 @@ vhost_scsi_set_endpoint(struct vhost_scsi *vs,
 		for (i = 0; i < VHOST_SCSI_MAX_VQ; i++) {
 			vq = &vs->vqs[i].vq;
 			mutex_lock(&vq->mutex);
-			vq->private_data = vs_tpg;
+			vhost_vq_set_backend(vq, vs_tpg);
 			vhost_vq_init_access(vq);
 			mutex_unlock(&vq->mutex);
 		}
@@ -1547,7 +1547,7 @@ vhost_scsi_clear_endpoint(struct vhost_scsi *vs,
 		for (i = 0; i < VHOST_SCSI_MAX_VQ; i++) {
 			vq = &vs->vqs[i].vq;
 			mutex_lock(&vq->mutex);
-			vq->private_data = NULL;
+			vhost_vq_set_backend(vq, NULL);
 			mutex_unlock(&vq->mutex);
 		}
 	}
@@ -1627,7 +1627,8 @@ static int vhost_scsi_open(struct inode *inode, struct file *f)
 		vqs[i] = &vs->vqs[i].vq;
 		vs->vqs[i].vq.handle_kick = vhost_scsi_handle_kick;
 	}
-	vhost_dev_init(&vs->dev, vqs, VHOST_SCSI_MAX_VQ, UIO_MAXIOV);
+	vhost_dev_init(&vs->dev, vqs, VHOST_SCSI_MAX_VQ, UIO_MAXIOV,
+		       VHOST_SCSI_WEIGHT, 0, NULL);
 
 	vhost_scsi_init_inflight(vs, NULL);
 
@@ -1726,21 +1727,11 @@ vhost_scsi_ioctl(struct file *f,
 	}
 }
 
-#ifdef CONFIG_COMPAT
-static long vhost_scsi_compat_ioctl(struct file *f, unsigned int ioctl,
-				unsigned long arg)
-{
-	return vhost_scsi_ioctl(f, ioctl, (unsigned long)compat_ptr(arg));
-}
-#endif
-
 static const struct file_operations vhost_scsi_fops = {
 	.owner          = THIS_MODULE,
 	.release        = vhost_scsi_release,
 	.unlocked_ioctl = vhost_scsi_ioctl,
-#ifdef CONFIG_COMPAT
-	.compat_ioctl	= vhost_scsi_compat_ioctl,
-#endif
+	.compat_ioctl	= compat_ptr_ioctl,
 	.open           = vhost_scsi_open,
 	.llseek		= noop_llseek,
 };
@@ -2302,7 +2293,6 @@ static const struct target_core_fabric_ops vhost_scsi_ops = {
 	.sess_get_index			= vhost_scsi_sess_get_index,
 	.sess_get_initiator_sid		= NULL,
 	.write_pending			= vhost_scsi_write_pending,
-	.write_pending_status		= vhost_scsi_write_pending_status,
 	.set_default_node_attributes	= vhost_scsi_set_default_node_attrs,
 	.get_cmd_state			= vhost_scsi_get_cmd_state,
 	.queue_data_in			= vhost_scsi_queue_data_in,

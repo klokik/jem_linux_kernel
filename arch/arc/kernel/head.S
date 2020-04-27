@@ -1,11 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * ARC CPU startup Code
  *
  * Copyright (C) 2004, 2007-2010, 2011-2012 Synopsys, Inc. (www.synopsys.com)
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * Vineetg: Dec 2007
  *  -Check if we are running on Simulator or on real hardware
@@ -17,6 +14,7 @@
 #include <asm/entry.h>
 #include <asm/arcregs.h>
 #include <asm/cache.h>
+#include <asm/dsp-impl.h>
 #include <asm/irqflags.h>
 
 .macro CPU_EARLY_SETUP
@@ -54,9 +52,17 @@
 	; gcc 7.3.1 (ARC GNU 2018.03) onwards generates unaligned access
 	; by default
 	lr	r5, [status32]
+#ifdef CONFIG_ARC_USE_UNALIGNED_MEM_ACCESS
 	bset	r5, r5, STATUS_AD_BIT
+#else
+	; Although disabled at reset, bootloader might have enabled it
+	bclr	r5, r5, STATUS_AD_BIT
+#endif
 	kflag	r5
 #endif
+	; Config DSP_CTRL properly, so kernel may use integer multiply,
+	; multiply-accumulate, and divide operations
+	DSP_EARLY_INIT
 .endm
 
 	.section .init.text, "ax",@progbits
@@ -106,6 +112,7 @@ ENTRY(stext)
 	;    r2 = pointer to uboot provided cmdline or external DTB in mem
 	; These are handled later in handle_uboot_args()
 	st	r0, [@uboot_tag]
+	st      r1, [@uboot_magic]
 	st	r2, [@uboot_arg]
 
 	; setup "current" tsk and optionally cache it in dedicated r25

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  linux/fs/exec.c
  *
@@ -58,7 +59,6 @@
 #include <linux/kmod.h>
 #include <linux/fsnotify.h>
 #include <linux/fs_struct.h>
-#include <linux/pipe_fs_i.h>
 #include <linux/oom.h>
 #include <linux/compat.h>
 #include <linux/vmalloc.h>
@@ -272,7 +272,6 @@ static int __bprm_mm_init(struct linux_binprm *bprm)
 		goto err;
 
 	mm->stack_vm = mm->total_vm = 1;
-	arch_bprm_mm_init(mm, vma);
 	up_write(&mm->mmap_sem);
 	bprm->p = vma->vm_end - sizeof(void *);
 	return 0;
@@ -761,6 +760,11 @@ int setup_arg_pages(struct linux_binprm *bprm,
 		goto out_unlock;
 	BUG_ON(prev != vma);
 
+	if (unlikely(vm_flags & VM_EXEC)) {
+		pr_warn_once("process '%pD4' started with executable stack\n",
+			     bprm->file);
+	}
+
 	/* Move stack pages down in memory. */
 	if (stack_shift) {
 		ret = shift_arg_pages(vma, stack_shift);
@@ -932,7 +936,7 @@ int kernel_read_file(struct file *file, void **buf, loff_t *size,
 		bytes = kernel_read(file, *buf + pos, i_size - pos, &pos);
 		if (bytes < 0) {
 			ret = bytes;
-			goto out;
+			goto out_free;
 		}
 
 		if (bytes == 0)
@@ -981,6 +985,32 @@ int kernel_read_file_from_path(const char *path, void **buf, loff_t *size,
 }
 EXPORT_SYMBOL_GPL(kernel_read_file_from_path);
 
+int kernel_read_file_from_path_initns(const char *path, void **buf,
+				      loff_t *size, loff_t max_size,
+				      enum kernel_read_file_id id)
+{
+	struct file *file;
+	struct path root;
+	int ret;
+
+	if (!path || !*path)
+		return -EINVAL;
+
+	task_lock(&init_task);
+	get_fs_root(init_task.fs, &root);
+	task_unlock(&init_task);
+
+	file = file_open_root(root.dentry, root.mnt, path, O_RDONLY, 0);
+	path_put(&root);
+	if (IS_ERR(file))
+		return PTR_ERR(file);
+
+	ret = kernel_read_file(file, buf, size, max_size, id);
+	fput(file);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(kernel_read_file_from_path_initns);
+
 int kernel_read_file_from_fd(int fd, void **buf, loff_t *size, loff_t max_size,
 			     enum kernel_read_file_id id)
 {
@@ -1006,15 +1036,25 @@ ssize_t read_code(struct file *file, unsigned long addr, loff_t pos, size_t len)
 }
 EXPORT_SYMBOL(read_code);
 
+/*
+ * Maps the mm_struct mm into the current task struct.
+ * On success, this function returns with the mutex
+ * exec_update_mutex locked.
+ */
 static int exec_mmap(struct mm_struct *mm)
 {
 	struct task_struct *tsk;
 	struct mm_struct *old_mm, *active_mm;
+	int ret;
 
 	/* Notify parent that we're no longer interested in the old VM */
 	tsk = current;
 	old_mm = current->mm;
-	mm_release(tsk, old_mm);
+	exec_mm_release(tsk, old_mm);
+
+	ret = mutex_lock_killable(&tsk->signal->exec_update_mutex);
+	if (ret)
+		return ret;
 
 	if (old_mm) {
 		sync_mm_rss(old_mm);
@@ -1027,11 +1067,14 @@ static int exec_mmap(struct mm_struct *mm)
 		down_read(&old_mm->mmap_sem);
 		if (unlikely(old_mm->core_state)) {
 			up_read(&old_mm->mmap_sem);
+			mutex_unlock(&tsk->signal->exec_update_mutex);
 			return -EINTR;
 		}
 	}
+
 	task_lock(tsk);
 	active_mm = tsk->active_mm;
+	membarrier_exec_mmap(mm);
 	tsk->mm = mm;
 	tsk->active_mm = mm;
 	activate_mm(active_mm, mm);
@@ -1130,7 +1173,7 @@ static int de_thread(struct task_struct *tsk)
 		 * also take its birthdate (always earlier than our own).
 		 */
 		tsk->start_time = leader->start_time;
-		tsk->real_start_time = leader->real_start_time;
+		tsk->start_boottime = leader->start_boottime;
 
 		BUG_ON(!same_thread_group(leader, tsk));
 		BUG_ON(has_group_leader_pid(tsk));
@@ -1184,34 +1227,6 @@ no_thread_group:
 	/* we have changed execution domain */
 	tsk->exit_signal = SIGCHLD;
 
-#ifdef CONFIG_POSIX_TIMERS
-	exit_itimers(sig);
-	flush_itimer_signals();
-#endif
-
-	if (atomic_read(&oldsighand->count) != 1) {
-		struct sighand_struct *newsighand;
-		/*
-		 * This ->sighand is shared with the CLONE_SIGHAND
-		 * but not CLONE_THREAD task, switch to the new one.
-		 */
-		newsighand = kmem_cache_alloc(sighand_cachep, GFP_KERNEL);
-		if (!newsighand)
-			return -ENOMEM;
-
-		atomic_set(&newsighand->count, 1);
-		memcpy(newsighand->action, oldsighand->action,
-		       sizeof(newsighand->action));
-
-		write_lock_irq(&tasklist_lock);
-		spin_lock(&oldsighand->siglock);
-		rcu_assign_pointer(tsk->sighand, newsighand);
-		spin_unlock(&oldsighand->siglock);
-		write_unlock_irq(&tasklist_lock);
-
-		__cleanup_sighand(oldsighand);
-	}
-
 	BUG_ON(!thread_group_leader(tsk));
 	return 0;
 
@@ -1222,6 +1237,36 @@ killed:
 	sig->notify_count = 0;
 	read_unlock(&tasklist_lock);
 	return -EAGAIN;
+}
+
+
+static int unshare_sighand(struct task_struct *me)
+{
+	struct sighand_struct *oldsighand = me->sighand;
+
+	if (refcount_read(&oldsighand->count) != 1) {
+		struct sighand_struct *newsighand;
+		/*
+		 * This ->sighand is shared with the CLONE_SIGHAND
+		 * but not CLONE_THREAD task, switch to the new one.
+		 */
+		newsighand = kmem_cache_alloc(sighand_cachep, GFP_KERNEL);
+		if (!newsighand)
+			return -ENOMEM;
+
+		refcount_set(&newsighand->count, 1);
+		memcpy(newsighand->action, oldsighand->action,
+		       sizeof(newsighand->action));
+
+		write_lock_irq(&tasklist_lock);
+		spin_lock(&oldsighand->siglock);
+		rcu_assign_pointer(me->sighand, newsighand);
+		spin_unlock(&oldsighand->siglock);
+		write_unlock_irq(&tasklist_lock);
+
+		__cleanup_sighand(oldsighand);
+	}
+	return 0;
 }
 
 char *__get_task_comm(char *buf, size_t buf_size, struct task_struct *tsk)
@@ -1255,13 +1300,13 @@ void __set_task_comm(struct task_struct *tsk, const char *buf, bool exec)
  */
 int flush_old_exec(struct linux_binprm * bprm)
 {
+	struct task_struct *me = current;
 	int retval;
 
 	/*
-	 * Make sure we have a private signal table and that
-	 * we are unassociated from the previous thread group.
+	 * Make this the only thread in the thread group.
 	 */
-	retval = de_thread(current);
+	retval = de_thread(me);
 	if (retval)
 		goto out;
 
@@ -1281,18 +1326,31 @@ int flush_old_exec(struct linux_binprm * bprm)
 		goto out;
 
 	/*
-	 * After clearing bprm->mm (to mark that current is using the
-	 * prepared mm now), we have nothing left of the original
+	 * After setting bprm->called_exec_mmap (to mark that current is
+	 * using the prepared mm now), we have nothing left of the original
 	 * process. If anything from here on returns an error, the check
 	 * in search_binary_handler() will SEGV current.
 	 */
+	bprm->called_exec_mmap = 1;
 	bprm->mm = NULL;
 
+#ifdef CONFIG_POSIX_TIMERS
+	exit_itimers(me->signal);
+	flush_itimer_signals();
+#endif
+
+	/*
+	 * Make the signal table private.
+	 */
+	retval = unshare_sighand(me);
+	if (retval)
+		goto out;
+
 	set_fs(USER_DS);
-	current->flags &= ~(PF_RANDOMIZE | PF_FORKNOEXEC | PF_KTHREAD |
+	me->flags &= ~(PF_RANDOMIZE | PF_FORKNOEXEC | PF_KTHREAD |
 					PF_NOFREEZE | PF_NO_SETAFFINITY);
 	flush_thread();
-	current->personality &= ~bprm->per_clear;
+	me->personality &= ~bprm->per_clear;
 
 	/*
 	 * We have to apply CLOEXEC before we change whether the process is
@@ -1300,7 +1358,7 @@ int flush_old_exec(struct linux_binprm * bprm)
 	 * trying to access the should-be-closed file descriptors of a process
 	 * undergoing exec(2).
 	 */
-	do_close_on_exec(current->files);
+	do_close_on_exec(me->files);
 	return 0;
 
 out:
@@ -1381,7 +1439,7 @@ void setup_new_exec(struct linux_binprm * bprm)
 
 	/* An exec changes our domain. We are no longer part of the thread
 	   group */
-	current->self_exec_id++;
+	WRITE_ONCE(current->self_exec_id, current->self_exec_id + 1);
 	flush_signal_handlers(current, 0);
 }
 EXPORT_SYMBOL(setup_new_exec);
@@ -1419,6 +1477,8 @@ static void free_bprm(struct linux_binprm *bprm)
 {
 	free_arg_pages(bprm);
 	if (bprm->cred) {
+		if (bprm->called_exec_mmap)
+			mutex_unlock(&current->signal->exec_update_mutex);
 		mutex_unlock(&current->signal->cred_guard_mutex);
 		abort_creds(bprm->cred);
 	}
@@ -1468,6 +1528,7 @@ void install_exec_creds(struct linux_binprm *bprm)
 	 * credentials; any time after this it may be unlocked.
 	 */
 	security_bprm_committed_creds(bprm);
+	mutex_unlock(&current->signal->exec_update_mutex);
 	mutex_unlock(&current->signal->cred_guard_mutex);
 }
 EXPORT_SYMBOL(install_exec_creds);
@@ -1563,7 +1624,7 @@ static void bprm_fill_uid(struct linux_binprm *bprm)
 
 /*
  * Fill the binprm structure from the inode.
- * Check permissions, then read the first 128 (BINPRM_BUF_SIZE) bytes
+ * Check permissions, then read the first BINPRM_BUF_SIZE bytes
  *
  * This may be called multiple times for binary chains (scripts for example).
  */
@@ -1652,15 +1713,17 @@ int search_binary_handler(struct linux_binprm *bprm)
 		if (!try_module_get(fmt->module))
 			continue;
 		read_unlock(&binfmt_lock);
+
 		bprm->recursion_depth++;
 		retval = fmt->load_binary(bprm);
+		bprm->recursion_depth--;
+
 		read_lock(&binfmt_lock);
 		put_binfmt(fmt);
-		bprm->recursion_depth--;
-		if (retval < 0 && !bprm->mm) {
+		if (retval < 0 && bprm->called_exec_mmap) {
 			/* we got to flush_old_exec() and failed after it */
 			read_unlock(&binfmt_lock);
-			force_sigsegv(SIGSEGV, current);
+			force_sigsegv(SIGSEGV);
 			return retval;
 		}
 		if (retval != -ENOEXEC || !bprm->file) {
@@ -1822,10 +1885,9 @@ static int __do_execve_file(int fd, struct filename *filename,
 	/* execve succeeded */
 	current->fs->in_exec = 0;
 	current->in_execve = 0;
-	membarrier_execve(current);
 	rseq_execve(current);
 	acct_update_integrals(current);
-	task_numa_free(current);
+	task_numa_free(current, false);
 	free_bprm(bprm);
 	kfree(pathbuf);
 	if (filename)
@@ -1944,15 +2006,10 @@ EXPORT_SYMBOL(set_binfmt);
  */
 void set_dumpable(struct mm_struct *mm, int value)
 {
-	unsigned long old, new;
-
 	if (WARN_ON((unsigned)value > SUID_DUMP_ROOT))
 		return;
 
-	do {
-		old = READ_ONCE(mm->flags);
-		new = (old & ~MMF_DUMPABLE_MASK) | value;
-	} while (cmpxchg(&mm->flags, old, new) != old);
+	set_mask_bits(&mm->flags, MMF_DUMPABLE_MASK, value);
 }
 
 SYSCALL_DEFINE3(execve,

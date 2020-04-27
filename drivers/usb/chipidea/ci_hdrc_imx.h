@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0+
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * Copyright 2012 Freescale Semiconductor, Inc.
  */
@@ -18,9 +18,12 @@ struct imx_usbmisc_data {
 	/* true if dt specifies polarity */
 	unsigned int oc_pol_configured:1;
 
+	unsigned int pwr_pol:1; /* power polarity */
 	unsigned int evdo:1; /* set external vbus divider option */
 	unsigned int ulpi:1; /* connected to an ULPI phy */
 	unsigned int hsic:1; /* HSIC controlller */
+	unsigned int ext_id:1; /* ID from exteranl event */
+	unsigned int ext_vbus:1; /* Vbus from exteranl event */
 };
 
 int imx_usbmisc_init(struct imx_usbmisc_data *data);

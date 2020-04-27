@@ -473,6 +473,7 @@ struct iscsi_cmd {
 	struct timer_list	dataout_timer;
 	/* Iovecs for SCSI data payload RX/TX w/ kernel level sockets */
 	struct kvec		*iov_data;
+	void			*overflow_buf;
 	/* Iovecs for miscellaneous purposes */
 #define ISCSI_MISC_IOVECS			5
 	struct kvec		iov_misc[ISCSI_MISC_IOVECS];
@@ -675,7 +676,7 @@ struct iscsi_session {
 	atomic_t		session_logout;
 	atomic_t		session_reinstatement;
 	atomic_t		session_stop_active;
-	atomic_t		sleep_on_sess_wait_comp;
+	atomic_t		session_close;
 	/* connection list */
 	struct list_head	sess_conn_list;
 	struct list_head	cr_active_list;

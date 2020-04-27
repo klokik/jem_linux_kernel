@@ -846,7 +846,7 @@ static void uasp_set_alt(struct f_uas *fu)
 
 	fu->flags = USBG_IS_UAS;
 
-	if (gadget->speed == USB_SPEED_SUPER)
+	if (gadget->speed >= USB_SPEED_SUPER)
 		fu->flags |= USBG_USE_STREAMS;
 
 	config_ep_by_speed(gadget, f, fu->ep_in);
@@ -1292,14 +1292,6 @@ static u32 usbg_sess_get_index(struct se_session *se_sess)
 	return 0;
 }
 
-/*
- * XXX Error recovery: return != 0 if we expect writes. Dunno when that could be
- */
-static int usbg_write_pending_status(struct se_cmd *se_cmd)
-{
-	return 0;
-}
-
 static void usbg_set_default_node_attrs(struct se_node_acl *nacl)
 {
 }
@@ -1725,7 +1717,6 @@ static const struct target_core_fabric_ops usbg_ops = {
 	.sess_get_index			= usbg_sess_get_index,
 	.sess_get_initiator_sid		= NULL,
 	.write_pending			= usbg_send_write_request,
-	.write_pending_status		= usbg_write_pending_status,
 	.set_default_node_attributes	= usbg_set_default_node_attrs,
 	.get_cmd_state			= usbg_get_cmd_state,
 	.queue_data_in			= usbg_send_read_response,
@@ -2102,6 +2093,16 @@ static void tcm_delayed_set_alt(struct work_struct *wq)
 	usb_composite_setup_continue(fu->function.config->cdev);
 }
 
+static int tcm_get_alt(struct usb_function *f, unsigned intf)
+{
+	if (intf == bot_intf_desc.bInterfaceNumber)
+		return USB_G_ALT_INT_BBB;
+	if (intf == uasp_intf_desc.bInterfaceNumber)
+		return USB_G_ALT_INT_UAS;
+
+	return -EOPNOTSUPP;
+}
+
 static int tcm_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
 {
 	struct f_uas *fu = to_f_uas(f);
@@ -2309,6 +2310,7 @@ static struct usb_function *tcm_alloc(struct usb_function_instance *fi)
 	fu->function.bind = tcm_bind;
 	fu->function.unbind = tcm_unbind;
 	fu->function.set_alt = tcm_set_alt;
+	fu->function.get_alt = tcm_get_alt;
 	fu->function.setup = tcm_setup;
 	fu->function.disable = tcm_disable;
 	fu->function.free_func = tcm_free;

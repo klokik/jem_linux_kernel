@@ -43,6 +43,7 @@
 #include <linux/ip.h>
 #include <linux/ipv6.h>
 #include <linux/moduleparam.h>
+#include <linux/indirect_call_wrapper.h>
 
 #include "mlx4_en.h"
 
@@ -261,6 +262,10 @@ static void mlx4_en_stamp_wqe(struct mlx4_en_priv *priv,
 	}
 }
 
+INDIRECT_CALLABLE_DECLARE(u32 mlx4_en_free_tx_desc(struct mlx4_en_priv *priv,
+						   struct mlx4_en_tx_ring *ring,
+						   int index, u64 timestamp,
+						   int napi_mode));
 
 u32 mlx4_en_free_tx_desc(struct mlx4_en_priv *priv,
 			 struct mlx4_en_tx_ring *ring,
@@ -328,6 +333,11 @@ u32 mlx4_en_free_tx_desc(struct mlx4_en_priv *priv,
 
 	return tx_info->nr_txbb;
 }
+
+INDIRECT_CALLABLE_DECLARE(u32 mlx4_en_recycle_tx_desc(struct mlx4_en_priv *priv,
+						      struct mlx4_en_tx_ring *ring,
+						      int index, u64 timestamp,
+						      int napi_mode));
 
 u32 mlx4_en_recycle_tx_desc(struct mlx4_en_priv *priv,
 			    struct mlx4_en_tx_ring *ring,
@@ -449,7 +459,9 @@ bool mlx4_en_process_tx_cq(struct net_device *dev,
 				timestamp = mlx4_en_get_cqe_ts(cqe);
 
 			/* free next descriptor */
-			last_nr_txbb = ring->free_tx_desc(
+			last_nr_txbb = INDIRECT_CALL_2(ring->free_tx_desc,
+						       mlx4_en_free_tx_desc,
+						       mlx4_en_recycle_tx_desc,
 					priv, ring, ring_index,
 					timestamp, napi_budget);
 
@@ -685,16 +697,15 @@ static void build_inline_wqe(struct mlx4_en_tx_desc *tx_desc,
 }
 
 u16 mlx4_en_select_queue(struct net_device *dev, struct sk_buff *skb,
-			 struct net_device *sb_dev,
-			 select_queue_fallback_t fallback)
+			 struct net_device *sb_dev)
 {
 	struct mlx4_en_priv *priv = netdev_priv(dev);
 	u16 rings_p_up = priv->num_tx_rings_p_up;
 
 	if (netdev_get_num_tc(dev))
-		return fallback(dev, skb, NULL);
+		return netdev_pick_tx(dev, skb, NULL);
 
-	return fallback(dev, skb, NULL) % rings_p_up;
+	return netdev_pick_tx(dev, skb, NULL) % rings_p_up;
 }
 
 static void mlx4_bf_copy(void __iomem *dst, const void *src,
@@ -773,9 +784,7 @@ static bool mlx4_en_build_dma_wqe(struct mlx4_en_priv *priv,
 
 	/* Map fragments if any */
 	for (i_frag = shinfo->nr_frags - 1; i_frag >= 0; i_frag--) {
-		const struct skb_frag_struct *frag;
-
-		frag = &shinfo->frags[i_frag];
+		const skb_frag_t *frag = &shinfo->frags[i_frag];
 		byte_count = skb_frag_size(frag);
 		dma = skb_frag_dma_map(ddev, frag,
 				       0, byte_count,
@@ -1043,7 +1052,7 @@ netdev_tx_t mlx4_en_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	send_doorbell = __netdev_tx_sent_queue(ring->tx_queue,
 					       tx_info->nr_bytes,
-					       skb->xmit_more);
+					       netdev_xmit_more());
 
 	real_size = (real_size / 16) & 0x3f;
 

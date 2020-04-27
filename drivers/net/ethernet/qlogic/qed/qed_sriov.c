@@ -352,7 +352,7 @@ static int qed_iov_post_vf_bulletin(struct qed_hwfn *p_hwfn,
 
 	/* propagate bulletin board via dmae to vm memory */
 	memset(&params, 0, sizeof(params));
-	params.flags = QED_DMAE_FLAG_VF_DST;
+	SET_FIELD(params.flags, QED_DMAE_PARAMS_DST_VF_VALID, 0x1);
 	params.dst_vfid = p_vf->abs_vf_id;
 	return qed_dmae_host2host(p_hwfn, p_ptt, p_vf->bulletin.phys,
 				  p_vf->vf_bulletin, p_vf->bulletin.size / 4,
@@ -917,10 +917,11 @@ static u8 qed_iov_alloc_vf_igu_sbs(struct qed_hwfn *p_hwfn,
 		/* Configure igu sb in CAU which were marked valid */
 		qed_init_cau_sb_entry(p_hwfn, &sb_entry,
 				      p_hwfn->rel_pf_id, vf->abs_vf_id, 1);
+
 		qed_dmae_host2grc(p_hwfn, p_ptt,
 				  (u64)(uintptr_t)&sb_entry,
 				  CAU_REG_SB_VAR_MEMORY +
-				  p_block->igu_sb_id * sizeof(u64), 2, 0);
+				  p_block->igu_sb_id * sizeof(u64), 2, NULL);
 	}
 
 	vf->num_sbs = (u8) num_rx_queues;
@@ -1224,8 +1225,8 @@ static void qed_iov_send_response(struct qed_hwfn *p_hwfn,
 
 	eng_vf_id = p_vf->abs_vf_id;
 
-	memset(&params, 0, sizeof(struct qed_dmae_params));
-	params.flags = QED_DMAE_FLAG_VF_DST;
+	memset(&params, 0, sizeof(params));
+	SET_FIELD(params.flags, QED_DMAE_PARAMS_DST_VF_VALID, 0x1);
 	params.dst_vfid = eng_vf_id;
 
 	qed_dmae_host2host(p_hwfn, p_ptt, mbx->reply_phys + sizeof(u64),
@@ -1591,7 +1592,7 @@ static void qed_iov_vf_mbx_acquire(struct qed_hwfn *p_hwfn,
 			p_vfdev->eth_fp_hsi_minor = ETH_HSI_VER_NO_PKT_LEN_TUNN;
 		} else {
 			DP_INFO(p_hwfn,
-				"VF[%d] needs fastpath HSI %02x.%02x, which is incompatible with loaded FW's faspath HSI %02x.%02x\n",
+				"VF[%d] needs fastpath HSI %02x.%02x, which is incompatible with loaded FW's fastpath HSI %02x.%02x\n",
 				vf->abs_vf_id,
 				req->vfdev_info.eth_fp_hsi_major,
 				req->vfdev_info.eth_fp_hsi_minor,
@@ -2004,7 +2005,7 @@ static void qed_iov_vf_mbx_stop_vport(struct qed_hwfn *p_hwfn,
 	    (qed_iov_validate_active_txq(p_hwfn, vf))) {
 		vf->b_malicious = true;
 		DP_NOTICE(p_hwfn,
-			  "VF [%02x] - considered malicious; Unable to stop RX/TX queuess\n",
+			  "VF [%02x] - considered malicious; Unable to stop RX/TX queues\n",
 			  vf->abs_vf_id);
 		status = PFVF_STATUS_MALICIOUS;
 		goto out;
@@ -4102,8 +4103,9 @@ static int qed_iov_copy_vf_msg(struct qed_hwfn *p_hwfn, struct qed_ptt *ptt,
 	if (!vf_info)
 		return -EINVAL;
 
-	memset(&params, 0, sizeof(struct qed_dmae_params));
-	params.flags = QED_DMAE_FLAG_VF_SRC | QED_DMAE_FLAG_COMPLETION_DST;
+	memset(&params, 0, sizeof(params));
+	SET_FIELD(params.flags, QED_DMAE_PARAMS_SRC_VF_VALID, 0x1);
+	SET_FIELD(params.flags, QED_DMAE_PARAMS_COMPLETION_DST, 0x1);
 	params.src_vfid = vf_info->abs_vf_id;
 
 	if (qed_dmae_host2host(p_hwfn, ptt,
@@ -4353,9 +4355,9 @@ qed_iov_bulletin_get_forced_vlan(struct qed_hwfn *p_hwfn, u16 rel_vf_id)
 static int qed_iov_configure_tx_rate(struct qed_hwfn *p_hwfn,
 				     struct qed_ptt *p_ptt, int vfid, int val)
 {
-	struct qed_mcp_link_state *p_link;
 	struct qed_vf_info *vf;
 	u8 abs_vp_id = 0;
+	u16 rl_id;
 	int rc;
 
 	vf = qed_iov_get_vf_info(p_hwfn, (u16)vfid, true);
@@ -4366,10 +4368,8 @@ static int qed_iov_configure_tx_rate(struct qed_hwfn *p_hwfn,
 	if (rc)
 		return rc;
 
-	p_link = &QED_LEADING_HWFN(p_hwfn->cdev)->mcp_info->link_output;
-
-	return qed_init_vport_rl(p_hwfn, p_ptt, abs_vp_id, (u32)val,
-				 p_link->speed);
+	rl_id = abs_vp_id;	/* The "rl_id" is set as the "vport_id" */
+	return qed_init_global_rl(p_hwfn, p_ptt, rl_id, (u32)val);
 }
 
 static int
@@ -4449,6 +4449,13 @@ int qed_sriov_disable(struct qed_dev *cdev, bool pci_enabled)
 	if (cdev->p_iov_info && cdev->p_iov_info->num_vfs && pci_enabled)
 		pci_disable_sriov(cdev->pdev);
 
+	if (cdev->recov_in_prog) {
+		DP_VERBOSE(cdev,
+			   QED_MSG_IOV,
+			   "Skip SRIOV disable operations in the device since a recovery is in progress\n");
+		goto out;
+	}
+
 	for_each_hwfn(cdev, i) {
 		struct qed_hwfn *hwfn = &cdev->hwfns[i];
 		struct qed_ptt *ptt = qed_ptt_acquire(hwfn);
@@ -4488,7 +4495,7 @@ int qed_sriov_disable(struct qed_dev *cdev, bool pci_enabled)
 
 		qed_ptt_release(hwfn, ptt);
 	}
-
+out:
 	qed_iov_set_vfs_to_disable(cdev, false);
 
 	return 0;

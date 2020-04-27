@@ -1,16 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2014 Felix Fietkau <nbd@openwrt.org>
  * Copyright (C) 2015 Jakub Kicinski <kubakici@wp.pl>
  * Copyright (C) 2018 Stanislaw Gruszka <stf_xl@wp.pl>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2
- * as published by the Free Software Foundation
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/module.h>
@@ -67,6 +59,11 @@ static void mt76x0_set_chip_cap(struct mt76x02_dev *dev)
 		dev_dbg(dev->mt76.dev, "mask out 2GHz support\n");
 	}
 
+	if (is_mt7630(dev)) {
+		dev->mt76.cap.has_5ghz = false;
+		dev_dbg(dev->mt76.dev, "mask out 5GHz support\n");
+	}
+
 	if (!mt76x02_field_valid(nic_conf1 & 0xff))
 		nic_conf1 &= 0xff00;
 
@@ -112,7 +109,7 @@ static void mt76x0_set_freq_offset(struct mt76x02_dev *dev)
 
 void mt76x0_read_rx_gain(struct mt76x02_dev *dev)
 {
-	struct ieee80211_channel *chan = dev->mt76.chandef.chan;
+	struct ieee80211_channel *chan = dev->mphy.chandef.chan;
 	struct mt76x02_rx_freq_cal *caldata = &dev->cal.rx;
 	s8 val, lna_5g[3], lna_2g;
 	u16 rssi_offset;
@@ -132,7 +129,7 @@ void mt76x0_read_rx_gain(struct mt76x02_dev *dev)
 
 static s8 mt76x0_get_delta(struct mt76x02_dev *dev)
 {
-	struct cfg80211_chan_def *chandef = &dev->mt76.chandef;
+	struct cfg80211_chan_def *chandef = &dev->mphy.chandef;
 	u8 val;
 
 	if (chandef->width == NL80211_CHAN_WIDTH_80) {
@@ -152,11 +149,11 @@ static s8 mt76x0_get_delta(struct mt76x02_dev *dev)
 	return mt76x02_rate_power_val(val);
 }
 
-void mt76x0_get_tx_power_per_rate(struct mt76x02_dev *dev)
+void mt76x0_get_tx_power_per_rate(struct mt76x02_dev *dev,
+				  struct ieee80211_channel *chan,
+				  struct mt76_rate_power *t)
 {
-	struct ieee80211_channel *chan = dev->mt76.chandef.chan;
 	bool is_2ghz = chan->band == NL80211_BAND_2GHZ;
-	struct mt76_rate_power *t = &dev->mt76.rate_power;
 	u16 val, addr;
 	s8 delta;
 
@@ -189,7 +186,7 @@ void mt76x0_get_tx_power_per_rate(struct mt76x02_dev *dev)
 	addr = is_2ghz ? MT_EE_TX_POWER_BYRATE_BASE + 8 : 0x126;
 	val = mt76x02_eeprom_get(dev, addr);
 	t->ht[4] = t->ht[5] = t->vht[4] = t->vht[5] = s6_to_s8(val);
-	t->ht[6] = t->vht[6] = s6_to_s8(val >> 8);
+	t->ht[6] = t->ht[7] = t->vht[6] = t->vht[7] = s6_to_s8(val >> 8);
 
 	/* ht-vht mcs 1ss 0, 1, 2, 3 stbc */
 	addr = is_2ghz ? MT_EE_TX_POWER_BYRATE_BASE + 14 : 0xec;
@@ -205,16 +202,17 @@ void mt76x0_get_tx_power_per_rate(struct mt76x02_dev *dev)
 
 	/* vht mcs 8, 9 5GHz */
 	val = mt76x02_eeprom_get(dev, 0x132);
-	t->vht[7] = s6_to_s8(val);
-	t->vht[8] = s6_to_s8(val >> 8);
+	t->vht[8] = s6_to_s8(val);
+	t->vht[9] = s6_to_s8(val >> 8);
 
 	delta = mt76x0_tssi_enabled(dev) ? 0 : mt76x0_get_delta(dev);
 	mt76x02_add_rate_power_offset(t, delta);
 }
 
-void mt76x0_get_power_info(struct mt76x02_dev *dev, s8 *tp)
+void mt76x0_get_power_info(struct mt76x02_dev *dev,
+			   struct ieee80211_channel *chan, s8 *tp)
 {
-	struct mt76x0_chan_map {
+	static const struct mt76x0_chan_map {
 		u8 chan;
 		u8 offset;
 	} chan_map[] = {
@@ -226,7 +224,6 @@ void mt76x0_get_power_info(struct mt76x02_dev *dev, s8 *tp)
 		{ 140, 26 }, { 151, 28 }, { 157, 30 }, { 161, 32 },
 		{ 167, 34 }, { 171, 36 }, { 175, 38 },
 	};
-	struct ieee80211_channel *chan = dev->mt76.chandef.chan;
 	u8 offset, addr;
 	int i, idx = 0;
 	u16 data;
@@ -345,7 +342,11 @@ int mt76x0_eeprom_init(struct mt76x02_dev *dev)
 	dev_info(dev->mt76.dev, "EEPROM ver:%02hhx fae:%02hhx\n",
 		 version, fae);
 
-	mt76x02_mac_setaddr(dev, dev->mt76.eeprom.data + MT_EE_MAC_ADDR);
+	memcpy(dev->mt76.macaddr, (u8 *)dev->mt76.eeprom.data + MT_EE_MAC_ADDR,
+	       ETH_ALEN);
+	mt76_eeprom_override(&dev->mt76);
+	mt76x02_mac_setaddr(dev, dev->mt76.macaddr);
+
 	mt76x0_set_chip_cap(dev);
 	mt76x0_set_freq_offset(dev);
 	mt76x0_set_temp_offset(dev);

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*******************************************************************************
  * Filename:  target_core_transport.c
  *
@@ -6,20 +7,6 @@
  * (c) Copyright 2002-2013 Datera, Inc.
  *
  * Nicholas A. Bellinger <nab@kernel.org>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  *
  ******************************************************************************/
 
@@ -597,6 +584,15 @@ void transport_free_session(struct se_session *se_sess)
 }
 EXPORT_SYMBOL(transport_free_session);
 
+static int target_release_res(struct se_device *dev, void *data)
+{
+	struct se_session *sess = data;
+
+	if (dev->reservation_holder == sess)
+		target_release_reservation(dev);
+	return 0;
+}
+
 void transport_deregister_session(struct se_session *se_sess)
 {
 	struct se_portal_group *se_tpg = se_sess->se_tpg;
@@ -612,6 +608,12 @@ void transport_deregister_session(struct se_session *se_sess)
 	se_sess->se_tpg = NULL;
 	se_sess->fabric_sess_ptr = NULL;
 	spin_unlock_irqrestore(&se_tpg->session_lock, flags);
+
+	/*
+	 * Since the session is being removed, release SPC-2
+	 * reservations held by the session that is disappearing.
+	 */
+	target_for_each_device(target_release_res, se_sess);
 
 	pr_debug("TARGET_CORE[%s]: Deregistered fabric_sess\n",
 		se_tpg->se_tpg_tfo->fabric_name);
@@ -1274,6 +1276,19 @@ target_check_max_data_sg_nents(struct se_cmd *cmd, struct se_device *dev,
 	return TCM_NO_SENSE;
 }
 
+/**
+ * target_cmd_size_check - Check whether there will be a residual.
+ * @cmd: SCSI command.
+ * @size: Data buffer size derived from CDB. The data buffer size provided by
+ *   the SCSI transport driver is available in @cmd->data_length.
+ *
+ * Compare the data buffer size from the CDB with the data buffer limit from the transport
+ * header. Set @cmd->residual_count and SCF_OVERFLOW_BIT or SCF_UNDERFLOW_BIT if necessary.
+ *
+ * Note: target drivers set @cmd->data_length by calling transport_init_se_cmd().
+ *
+ * Return: TCM_NO_SENSE
+ */
 sense_reason_t
 target_cmd_size_check(struct se_cmd *cmd, unsigned int size)
 {
@@ -1883,7 +1898,8 @@ void transport_generic_request_failure(struct se_cmd *cmd,
 		 * See spc4r17, section 7.4.6 Control Mode Page, Table 349
 		 */
 		if (cmd->se_sess &&
-		    cmd->se_dev->dev_attrib.emulate_ua_intlck_ctrl == 2) {
+		    cmd->se_dev->dev_attrib.emulate_ua_intlck_ctrl
+					== TARGET_UA_INTLCK_CTRL_ESTABLISH_UA) {
 			target_ua_allocate_lun(cmd->se_sess->se_node_acl,
 					       cmd->orig_fe_lun, 0x2C,
 					ASCQ_2CH_PREVIOUS_RESERVATION_CONFLICT_STATUS);
@@ -2056,7 +2072,6 @@ void target_execute_cmd(struct se_cmd *cmd)
 
 	spin_lock_irq(&cmd->t_state_lock);
 	cmd->t_state = TRANSPORT_PROCESSING;
-	cmd->transport_state &= ~CMD_T_PRE_EXECUTE;
 	cmd->transport_state |= CMD_T_ACTIVE | CMD_T_SENT;
 	spin_unlock_irq(&cmd->t_state_lock);
 
@@ -2765,7 +2780,6 @@ int target_get_sess_cmd(struct se_cmd *se_cmd, bool ack_kref)
 		ret = -ESHUTDOWN;
 		goto out;
 	}
-	se_cmd->transport_state |= CMD_T_PRE_EXECUTE;
 	list_add_tail(&se_cmd->se_cmd_list, &se_sess->sess_cmd_list);
 	percpu_ref_get(&se_sess->cmd_count);
 out:
@@ -3272,6 +3286,22 @@ transport_send_check_condition_and_sense(struct se_cmd *cmd,
 	return cmd->se_tfo->queue_status(cmd);
 }
 EXPORT_SYMBOL(transport_send_check_condition_and_sense);
+
+/**
+ * target_send_busy - Send SCSI BUSY status back to the initiator
+ * @cmd: SCSI command for which to send a BUSY reply.
+ *
+ * Note: Only call this function if target_submit_cmd*() failed.
+ */
+int target_send_busy(struct se_cmd *cmd)
+{
+	WARN_ON_ONCE(cmd->se_cmd_flags & SCF_SCSI_TMR_CDB);
+
+	cmd->scsi_status = SAM_STAT_BUSY;
+	trace_target_cmd_complete(cmd);
+	return cmd->se_tfo->queue_status(cmd);
+}
+EXPORT_SYMBOL(target_send_busy);
 
 static void target_tmr_work(struct work_struct *work)
 {

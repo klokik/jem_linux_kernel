@@ -89,6 +89,7 @@
 #include <asm/fpu.h>
 #include <asm/fpu_emulator.h>
 #include <asm/inst.h>
+#include <asm/mmu_context.h>
 #include <linux/uaccess.h>
 
 #define STR(x)	__STR(x)
@@ -130,7 +131,7 @@ do {                                                        \
 			: "r" (addr), "i" (-EFAULT));       \
 } while(0)
 
-#ifdef CONFIG_CPU_HAS_LOAD_STORE_LR
+#ifndef CONFIG_CPU_NO_LOAD_STORE_LR
 #define     _LoadW(addr, value, res, type)   \
 do {                                                        \
 		__asm__ __volatile__ (                      \
@@ -151,7 +152,7 @@ do {                                                        \
 			: "r" (addr), "i" (-EFAULT));       \
 } while(0)
 
-#else /* !CONFIG_CPU_HAS_LOAD_STORE_LR */
+#else /* CONFIG_CPU_NO_LOAD_STORE_LR */
 /* For CPUs without lwl instruction */
 #define     _LoadW(addr, value, res, type) \
 do {                                                        \
@@ -186,7 +187,7 @@ do {                                                        \
 			: "r" (addr), "i" (-EFAULT));       \
 } while(0)
 
-#endif /* !CONFIG_CPU_HAS_LOAD_STORE_LR */
+#endif /* CONFIG_CPU_NO_LOAD_STORE_LR */
 
 #define     _LoadHWU(addr, value, res, type) \
 do {                                                        \
@@ -212,7 +213,7 @@ do {                                                        \
 			: "r" (addr), "i" (-EFAULT));       \
 } while(0)
 
-#ifdef CONFIG_CPU_HAS_LOAD_STORE_LR
+#ifndef CONFIG_CPU_NO_LOAD_STORE_LR
 #define     _LoadWU(addr, value, res, type)  \
 do {                                                        \
 		__asm__ __volatile__ (                      \
@@ -255,7 +256,7 @@ do {                                                        \
 			: "r" (addr), "i" (-EFAULT));       \
 } while(0)
 
-#else /* !CONFIG_CPU_HAS_LOAD_STORE_LR */
+#else /* CONFIG_CPU_NO_LOAD_STORE_LR */
 /* For CPUs without lwl and ldl instructions */
 #define	    _LoadWU(addr, value, res, type) \
 do {                                                        \
@@ -339,7 +340,7 @@ do {                                                        \
 			: "r" (addr), "i" (-EFAULT));       \
 } while(0)
 
-#endif /* !CONFIG_CPU_HAS_LOAD_STORE_LR */
+#endif /* CONFIG_CPU_NO_LOAD_STORE_LR */
 
 
 #define     _StoreHW(addr, value, res, type) \
@@ -365,7 +366,7 @@ do {                                                        \
 			: "r" (value), "r" (addr), "i" (-EFAULT));\
 } while(0)
 
-#ifdef CONFIG_CPU_HAS_LOAD_STORE_LR
+#ifndef CONFIG_CPU_NO_LOAD_STORE_LR
 #define     _StoreW(addr, value, res, type)  \
 do {                                                        \
 		__asm__ __volatile__ (                      \
@@ -406,7 +407,7 @@ do {                                                        \
 		: "r" (value), "r" (addr), "i" (-EFAULT));  \
 } while(0)
 
-#else /* !CONFIG_CPU_HAS_LOAD_STORE_LR */
+#else /* CONFIG_CPU_NO_LOAD_STORE_LR */
 #define     _StoreW(addr, value, res, type)  \
 do {                                                        \
 		__asm__ __volatile__ (                      \
@@ -482,7 +483,7 @@ do {                                                        \
 		: "memory");                                \
 } while(0)
 
-#endif /* !CONFIG_CPU_HAS_LOAD_STORE_LR */
+#endif /* CONFIG_CPU_NO_LOAD_STORE_LR */
 
 #else /* __BIG_ENDIAN */
 
@@ -508,7 +509,7 @@ do {                                                        \
 			: "r" (addr), "i" (-EFAULT));       \
 } while(0)
 
-#ifdef CONFIG_CPU_HAS_LOAD_STORE_LR
+#ifndef CONFIG_CPU_NO_LOAD_STORE_LR
 #define     _LoadW(addr, value, res, type)   \
 do {                                                        \
 		__asm__ __volatile__ (                      \
@@ -529,7 +530,7 @@ do {                                                        \
 			: "r" (addr), "i" (-EFAULT));       \
 } while(0)
 
-#else  /* !CONFIG_CPU_HAS_LOAD_STORE_LR */
+#else /* CONFIG_CPU_NO_LOAD_STORE_LR */
 /* For CPUs without lwl instruction */
 #define     _LoadW(addr, value, res, type) \
 do {                                                        \
@@ -564,7 +565,7 @@ do {                                                        \
 			: "r" (addr), "i" (-EFAULT));       \
 } while(0)
 
-#endif /* !CONFIG_CPU_HAS_LOAD_STORE_LR */
+#endif /* CONFIG_CPU_NO_LOAD_STORE_LR */
 
 
 #define     _LoadHWU(addr, value, res, type) \
@@ -591,7 +592,7 @@ do {                                                        \
 			: "r" (addr), "i" (-EFAULT));       \
 } while(0)
 
-#ifdef CONFIG_CPU_HAS_LOAD_STORE_LR
+#ifndef CONFIG_CPU_NO_LOAD_STORE_LR
 #define     _LoadWU(addr, value, res, type)  \
 do {                                                        \
 		__asm__ __volatile__ (                      \
@@ -634,7 +635,7 @@ do {                                                        \
 			: "r" (addr), "i" (-EFAULT));       \
 } while(0)
 
-#else /* !CONFIG_CPU_HAS_LOAD_STORE_LR */
+#else /* CONFIG_CPU_NO_LOAD_STORE_LR */
 /* For CPUs without lwl and ldl instructions */
 #define	    _LoadWU(addr, value, res, type) \
 do {                                                        \
@@ -717,7 +718,7 @@ do {                                                        \
 			: "=&r" (value), "=r" (res)	    \
 			: "r" (addr), "i" (-EFAULT));       \
 } while(0)
-#endif /* !CONFIG_CPU_HAS_LOAD_STORE_LR */
+#endif /* CONFIG_CPU_NO_LOAD_STORE_LR */
 
 #define     _StoreHW(addr, value, res, type) \
 do {                                                        \
@@ -742,7 +743,7 @@ do {                                                        \
 			: "r" (value), "r" (addr), "i" (-EFAULT));\
 } while(0)
 
-#ifdef CONFIG_CPU_HAS_LOAD_STORE_LR
+#ifndef CONFIG_CPU_NO_LOAD_STORE_LR
 #define     _StoreW(addr, value, res, type)  \
 do {                                                        \
 		__asm__ __volatile__ (                      \
@@ -783,7 +784,7 @@ do {                                                        \
 		: "r" (value), "r" (addr), "i" (-EFAULT));  \
 } while(0)
 
-#else /* !CONFIG_CPU_HAS_LOAD_STORE_LR */
+#else /* CONFIG_CPU_NO_LOAD_STORE_LR */
 /* For CPUs without swl and sdl instructions */
 #define     _StoreW(addr, value, res, type)  \
 do {                                                        \
@@ -860,7 +861,7 @@ do {                                                        \
 		: "memory");                                \
 } while(0)
 
-#endif /* !CONFIG_CPU_HAS_LOAD_STORE_LR */
+#endif /* CONFIG_CPU_NO_LOAD_STORE_LR */
 #endif
 
 #define LoadHWU(addr, value, res)	_LoadHWU(addr, value, res, kernel)
@@ -1364,20 +1365,20 @@ fault:
 		return;
 
 	die_if_kernel("Unhandled kernel unaligned access", regs);
-	force_sig(SIGSEGV, current);
+	force_sig(SIGSEGV);
 
 	return;
 
 sigbus:
 	die_if_kernel("Unhandled kernel unaligned access", regs);
-	force_sig(SIGBUS, current);
+	force_sig(SIGBUS);
 
 	return;
 
 sigill:
 	die_if_kernel
 	    ("Unhandled kernel unaligned access or invalid instruction", regs);
-	force_sig(SIGILL, current);
+	force_sig(SIGILL);
 }
 
 /* Recode table from 16-bit register notation to 32-bit GPR. */
@@ -1990,20 +1991,20 @@ fault:
 		return;
 
 	die_if_kernel("Unhandled kernel unaligned access", regs);
-	force_sig(SIGSEGV, current);
+	force_sig(SIGSEGV);
 
 	return;
 
 sigbus:
 	die_if_kernel("Unhandled kernel unaligned access", regs);
-	force_sig(SIGBUS, current);
+	force_sig(SIGBUS);
 
 	return;
 
 sigill:
 	die_if_kernel
 	    ("Unhandled kernel unaligned access or invalid instruction", regs);
-	force_sig(SIGILL, current);
+	force_sig(SIGILL);
 }
 
 static void emulate_load_store_MIPS16e(struct pt_regs *regs, void __user * addr)
@@ -2270,20 +2271,20 @@ fault:
 		return;
 
 	die_if_kernel("Unhandled kernel unaligned access", regs);
-	force_sig(SIGSEGV, current);
+	force_sig(SIGSEGV);
 
 	return;
 
 sigbus:
 	die_if_kernel("Unhandled kernel unaligned access", regs);
-	force_sig(SIGBUS, current);
+	force_sig(SIGBUS);
 
 	return;
 
 sigill:
 	die_if_kernel
 	    ("Unhandled kernel unaligned access or invalid instruction", regs);
-	force_sig(SIGILL, current);
+	force_sig(SIGILL);
 }
 
 asmlinkage void do_ade(struct pt_regs *regs)
@@ -2363,7 +2364,7 @@ asmlinkage void do_ade(struct pt_regs *regs)
 
 sigbus:
 	die_if_kernel("Kernel unaligned instruction access", regs);
-	force_sig(SIGBUS, current);
+	force_sig(SIGBUS);
 
 	/*
 	 * XXX On return from the signal handler we should advance the epc
@@ -2374,18 +2375,10 @@ sigbus:
 #ifdef CONFIG_DEBUG_FS
 static int __init debugfs_unaligned(void)
 {
-	struct dentry *d;
-
-	if (!mips_debugfs_dir)
-		return -ENODEV;
-	d = debugfs_create_u32("unaligned_instructions", S_IRUGO,
-			       mips_debugfs_dir, &unaligned_instructions);
-	if (!d)
-		return -ENOMEM;
-	d = debugfs_create_u32("unaligned_action", S_IRUGO | S_IWUSR,
-			       mips_debugfs_dir, &unaligned_action);
-	if (!d)
-		return -ENOMEM;
+	debugfs_create_u32("unaligned_instructions", S_IRUGO, mips_debugfs_dir,
+			   &unaligned_instructions);
+	debugfs_create_u32("unaligned_action", S_IRUGO | S_IWUSR,
+			   mips_debugfs_dir, &unaligned_action);
 	return 0;
 }
 arch_initcall(debugfs_unaligned);

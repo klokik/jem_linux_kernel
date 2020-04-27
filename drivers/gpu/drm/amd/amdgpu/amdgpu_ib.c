@@ -28,13 +28,16 @@
  */
 #include <linux/seq_file.h>
 #include <linux/slab.h>
-#include <drm/drmP.h>
+
 #include <drm/amdgpu_drm.h>
+#include <drm/drm_debugfs.h>
+
 #include "amdgpu.h"
 #include "atom.h"
 #include "amdgpu_trace.h"
 
 #define AMDGPU_IB_TEST_TIMEOUT	msecs_to_jiffies(1000)
+#define AMDGPU_IB_TEST_GFX_XGMI_TIMEOUT	msecs_to_jiffies(2000)
 
 /*
  * IB
@@ -45,7 +48,6 @@
  * produce command buffers which are send to the kernel and
  * put in IBs for execution by the requested ring.
  */
-static int amdgpu_debugfs_sa_init(struct amdgpu_device *adev);
 
 /**
  * amdgpu_ib_get - request an IB (Indirect Buffer)
@@ -140,7 +142,8 @@ int amdgpu_ib_schedule(struct amdgpu_ring *ring, unsigned num_ibs,
 	/* ring tests don't use a job */
 	if (job) {
 		vm = job->vm;
-		fence_ctx = job->base.s_fence->scheduled.context;
+		fence_ctx = job->base.s_fence ?
+			job->base.s_fence->scheduled.context : 0;
 	} else {
 		vm = NULL;
 		fence_ctx = 0;
@@ -202,12 +205,13 @@ int amdgpu_ib_schedule(struct amdgpu_ring *ring, unsigned num_ibs,
 			amdgpu_asic_flush_hdp(adev, ring);
 	}
 
+	if (need_ctx_switch)
+		status |= AMDGPU_HAVE_CTX_SWITCH;
+
 	skip_preamble = ring->current_ctx == fence_ctx;
 	if (job && ring->funcs->emit_cntxcntl) {
-		if (need_ctx_switch)
-			status |= AMDGPU_HAVE_CTX_SWITCH;
 		status |= job->preamble_status;
-
+		status |= job->preemption_status;
 		amdgpu_ring_emit_cntxcntl(ring, status);
 	}
 
@@ -216,13 +220,14 @@ int amdgpu_ib_schedule(struct amdgpu_ring *ring, unsigned num_ibs,
 
 		/* drop preamble IBs if we don't have a context switch */
 		if ((ib->flags & AMDGPU_IB_FLAG_PREAMBLE) &&
-			skip_preamble &&
-			!(status & AMDGPU_PREAMBLE_IB_PRESENT_FIRST) &&
-			!amdgpu_sriov_vf(adev)) /* for SRIOV preemption, Preamble CE ib must be inserted anyway */
+		    skip_preamble &&
+		    !(status & AMDGPU_PREAMBLE_IB_PRESENT_FIRST) &&
+		    !amdgpu_mcbp &&
+		    !amdgpu_sriov_vf(adev)) /* for SRIOV preemption, Preamble CE ib must be inserted anyway */
 			continue;
 
-		amdgpu_ring_emit_ib(ring, job, ib, need_ctx_switch);
-		need_ctx_switch = false;
+		amdgpu_ring_emit_ib(ring, job, ib, status);
+		status &= ~AMDGPU_HAVE_CTX_SWITCH;
 	}
 
 	if (ring->funcs->emit_tmz)
@@ -289,9 +294,7 @@ int amdgpu_ib_pool_init(struct amdgpu_device *adev)
 	}
 
 	adev->ib_pool_ready = true;
-	if (amdgpu_debugfs_sa_init(adev)) {
-		dev_err(adev->dev, "failed to register debugfs file for SA\n");
-	}
+
 	return 0;
 }
 
@@ -344,6 +347,8 @@ int amdgpu_ib_ring_tests(struct amdgpu_device *adev)
 		 * cost waiting for it coming back under RUNTIME only
 		*/
 		tmo_gfx = 8 * AMDGPU_IB_TEST_TIMEOUT;
+	} else if (adev->gmc.xgmi.hive_id) {
+		tmo_gfx = AMDGPU_IB_TEST_GFX_XGMI_TIMEOUT;
 	}
 
 	for (i = 0; i < adev->num_rings; ++i) {
@@ -413,7 +418,7 @@ static const struct drm_info_list amdgpu_debugfs_sa_list[] = {
 
 #endif
 
-static int amdgpu_debugfs_sa_init(struct amdgpu_device *adev)
+int amdgpu_debugfs_sa_init(struct amdgpu_device *adev)
 {
 #if defined(CONFIG_DEBUG_FS)
 	return amdgpu_debugfs_add_files(adev, amdgpu_debugfs_sa_list, 1);

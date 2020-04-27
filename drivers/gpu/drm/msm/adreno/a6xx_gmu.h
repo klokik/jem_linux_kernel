@@ -12,8 +12,7 @@
 struct a6xx_gmu_bo {
 	void *virt;
 	size_t size;
-	u64 iova;
-	struct page **pages;
+	dma_addr_t iova;
 };
 
 /*
@@ -26,9 +25,6 @@ struct a6xx_gmu_bo {
 
 /* the GMU is coming up for the first time or back from a power collapse */
 #define GMU_COLD_BOOT 1
-
-/* The GMU is being soft reset after a fault */
-#define GMU_RESET 2
 
 /*
  * These define the level of control that the GMU has - the higher the number
@@ -52,10 +48,7 @@ struct a6xx_gmu {
 	int hfi_irq;
 	int gmu_irq;
 
-	struct regulator *gx;
-
-	struct iommu_domain *domain;
-	u64 uncached_iova_base;
+	struct device *gxpd;
 
 	int idle_level;
 
@@ -65,6 +58,9 @@ struct a6xx_gmu {
 	int nr_clocks;
 	struct clk_bulk_data *clocks;
 	struct clk *core_clk;
+
+	/* current performance index set externally */
+	int current_perf_index;
 
 	int nr_gpu_freqs;
 	unsigned long gpu_freqs[16];
@@ -78,7 +74,8 @@ struct a6xx_gmu {
 
 	struct a6xx_hfi_queue queues[2];
 
-	struct tasklet_struct hfi_tasklet;
+	bool initialized;
+	bool hung;
 };
 
 static inline u32 gmu_read(struct a6xx_gmu *gmu, u32 offset)

@@ -41,6 +41,25 @@ struct mm_struct;
 
 #ifndef __ASSEMBLY__
 
+#ifdef CONFIG_PPC32
+static inline pmd_t *pmd_ptr(struct mm_struct *mm, unsigned long va)
+{
+	return pmd_offset(pud_offset(pgd_offset(mm, va), va), va);
+}
+
+static inline pmd_t *pmd_ptr_k(unsigned long va)
+{
+	return pmd_offset(pud_offset(pgd_offset_k(va), va), va);
+}
+
+static inline pte_t *virt_to_kpte(unsigned long vaddr)
+{
+	pmd_t *pmd = pmd_ptr_k(vaddr);
+
+	return pmd_none(*pmd) ? NULL : pte_offset_kernel(pmd, vaddr);
+}
+#endif
+
 #include <asm/tlbflush.h>
 
 /* Keep these as a macros to avoid include dependency mess */
@@ -66,8 +85,9 @@ extern unsigned long empty_zero_page[];
 
 extern pgd_t swapper_pg_dir[];
 
-int dma_pfn_limit_to_zone(u64 pfn_limit);
 extern void paging_init(void);
+
+extern unsigned long ioremap_bot;
 
 /*
  * kern_addr_valid is intended to indicate whether an address is a valid
@@ -78,21 +98,6 @@ extern void paging_init(void);
 
 #include <asm-generic/pgtable.h>
 
-
-/*
- * This gets called at the end of handling a page fault, when
- * the kernel has put a new PTE into the page table for the process.
- * We use it to ensure coherency between the i-cache and d-cache
- * for the page which has just been mapped in.
- * On machines which use an MMU hash table, we use this to put a
- * corresponding HPTE into the hash table ahead of time, instead of
- * waiting for the inevitable extra hash-table miss exception.
- */
-extern void update_mmu_cache(struct vm_area_struct *, unsigned long, pte_t *);
-
-extern int gup_hugepte(pte_t *ptep, unsigned long sz, unsigned long addr,
-		       unsigned long end, int write,
-		       struct page **pages, int *nr);
 #ifndef CONFIG_TRANSPARENT_HUGEPAGE
 #define pmd_large(pmd)		0
 #endif
@@ -101,7 +106,6 @@ extern int gup_hugepte(pte_t *ptep, unsigned long sz, unsigned long addr,
 unsigned long vmalloc_to_phys(void *vmalloc_addr);
 
 void pgtable_cache_add(unsigned int shift);
-void pgtable_cache_init(void);
 
 #if defined(CONFIG_STRICT_KERNEL_RWX) || defined(CONFIG_PPC32)
 void mark_initmem_nx(void);
@@ -137,6 +141,40 @@ static inline void pte_frag_set(mm_context_t *ctx, void *p)
 {
 }
 #endif
+
+#ifndef pmd_is_leaf
+#define pmd_is_leaf pmd_is_leaf
+static inline bool pmd_is_leaf(pmd_t pmd)
+{
+	return false;
+}
+#endif
+
+#ifndef pud_is_leaf
+#define pud_is_leaf pud_is_leaf
+static inline bool pud_is_leaf(pud_t pud)
+{
+	return false;
+}
+#endif
+
+#ifndef pgd_is_leaf
+#define pgd_is_leaf pgd_is_leaf
+static inline bool pgd_is_leaf(pgd_t pgd)
+{
+	return false;
+}
+#endif
+
+#ifdef CONFIG_PPC64
+#define is_ioremap_addr is_ioremap_addr
+static inline bool is_ioremap_addr(const void *x)
+{
+	unsigned long addr = (unsigned long)x;
+
+	return addr >= IOREMAP_BASE && addr < IOREMAP_END;
+}
+#endif /* CONFIG_PPC64 */
 
 #endif /* __ASSEMBLY__ */
 

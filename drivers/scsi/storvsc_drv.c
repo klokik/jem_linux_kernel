@@ -1,18 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2009, Microsoft Corporation.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
  *
  * Authors:
  *   Haiyang Zhang <haiyangz@microsoft.com>
@@ -385,8 +373,9 @@ enum storvsc_request_type {
  * This is the end of Protocol specific defines.
  */
 
-static int storvsc_ringbuffer_size = (256 * PAGE_SIZE);
+static int storvsc_ringbuffer_size = (128 * 1024);
 static u32 max_outstanding_req_per_channel;
+static int storvsc_change_queue_depth(struct scsi_device *sdev, int queue_depth);
 
 static int storvsc_vcpus_per_sub_channel = 4;
 
@@ -668,13 +657,22 @@ static void  handle_multichannel_storage(struct hv_device *device, int max_chns)
 {
 	struct device *dev = &device->device;
 	struct storvsc_device *stor_device;
-	int num_cpus = num_online_cpus();
 	int num_sc;
 	struct storvsc_cmd_request *request;
 	struct vstor_packet *vstor_packet;
 	int ret, t;
 
-	num_sc = ((max_chns > num_cpus) ? num_cpus : max_chns);
+	/*
+	 * If the number of CPUs is artificially restricted, such as
+	 * with maxcpus=1 on the kernel boot line, Hyper-V could offer
+	 * sub-channels >= the number of CPUs. These sub-channels
+	 * should not be created. The primary channel is already created
+	 * and assigned to one CPU, so check against # CPUs - 1.
+	 */
+	num_sc = min((int)(num_online_cpus() - 1), max_chns);
+	if (!num_sc)
+		return;
+
 	stor_device = get_out_stor_device(device);
 	if (!stor_device)
 		return;
@@ -1425,9 +1423,6 @@ static int storvsc_device_configure(struct scsi_device *sdevice)
 {
 	blk_queue_rq_timeout(sdevice->request_queue, (storvsc_timeout * HZ));
 
-	/* Ensure there are no gaps in presented sgls */
-	blk_queue_virt_boundary(sdevice->request_queue, PAGE_SIZE - 1);
-
 	sdevice->no_write_same = 1;
 
 	/*
@@ -1700,8 +1695,11 @@ static struct scsi_host_template scsi_driver = {
 	.this_id =		-1,
 	/* Make sure we dont get a sg segment crosses a page boundary */
 	.dma_boundary =		PAGE_SIZE-1,
+	/* Ensure there are no gaps in presented sgls */
+	.virt_boundary_mask =	PAGE_SIZE-1,
 	.no_write_same =	1,
 	.track_queue_depth =	1,
+	.change_queue_depth =	storvsc_change_queue_depth,
 };
 
 enum {
@@ -1728,6 +1726,13 @@ static const struct hv_vmbus_device_id id_table[] = {
 };
 
 MODULE_DEVICE_TABLE(vmbus, id_table);
+
+static const struct { guid_t guid; } fc_guid = { HV_SYNTHFC_GUID };
+
+static bool hv_dev_is_fc(struct hv_device *hv_dev)
+{
+	return guid_equal(&fc_guid.guid, &hv_dev->dev_type);
+}
 
 static int storvsc_probe(struct hv_device *device,
 			const struct hv_vmbus_device_id *dev_id)
@@ -1837,10 +1842,11 @@ static int storvsc_probe(struct hv_device *device,
 	 */
 	host->sg_tablesize = (stor_device->max_transfer_bytes >> PAGE_SHIFT);
 	/*
+	 * For non-IDE disks, the host supports multiple channels.
 	 * Set the number of HW queues we are supporting.
 	 */
-	if (stor_device->num_sc != 0)
-		host->nr_hw_queues = stor_device->num_sc + 1;
+	if (!dev_is_ide)
+		host->nr_hw_queues = num_present_cpus();
 
 	/*
 	 * Set the error handler work queue.
@@ -1908,6 +1914,15 @@ err_out0:
 	return ret;
 }
 
+/* Change a scsi target's queue depth */
+static int storvsc_change_queue_depth(struct scsi_device *sdev, int queue_depth)
+{
+	if (queue_depth > scsi_driver.can_queue)
+		queue_depth = scsi_driver.can_queue;
+
+	return scsi_change_queue_depth(sdev, queue_depth);
+}
+
 static int storvsc_remove(struct hv_device *dev)
 {
 	struct storvsc_device *stor_device = hv_get_drvdata(dev);
@@ -1928,11 +1943,45 @@ static int storvsc_remove(struct hv_device *dev)
 	return 0;
 }
 
+static int storvsc_suspend(struct hv_device *hv_dev)
+{
+	struct storvsc_device *stor_device = hv_get_drvdata(hv_dev);
+	struct Scsi_Host *host = stor_device->host;
+	struct hv_host_device *host_dev = shost_priv(host);
+
+	storvsc_wait_to_drain(stor_device);
+
+	drain_workqueue(host_dev->handle_error_wq);
+
+	vmbus_close(hv_dev->channel);
+
+	memset(stor_device->stor_chns, 0,
+	       num_possible_cpus() * sizeof(void *));
+
+	kfree(stor_device->stor_chns);
+	stor_device->stor_chns = NULL;
+
+	cpumask_clear(&stor_device->alloced_cpus);
+
+	return 0;
+}
+
+static int storvsc_resume(struct hv_device *hv_dev)
+{
+	int ret;
+
+	ret = storvsc_connect_to_vsp(hv_dev, storvsc_ringbuffer_size,
+				     hv_dev_is_fc(hv_dev));
+	return ret;
+}
+
 static struct hv_driver storvsc_drv = {
 	.name = KBUILD_MODNAME,
 	.id_table = id_table,
 	.probe = storvsc_probe,
 	.remove = storvsc_remove,
+	.suspend = storvsc_suspend,
+	.resume = storvsc_resume,
 	.driver = {
 		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},

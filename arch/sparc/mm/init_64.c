@@ -530,7 +530,8 @@ void __kprobes flush_icache_range(unsigned long start, unsigned long end)
 				paddr = kaddr & mask;
 			else {
 				pgd_t *pgdp = pgd_offset_k(kaddr);
-				pud_t *pudp = pud_offset(pgdp, kaddr);
+				p4d_t *p4dp = p4d_offset(pgdp, kaddr);
+				pud_t *pudp = pud_offset(p4dp, kaddr);
 				pmd_t *pmdp = pmd_offset(pudp, kaddr);
 				pte_t *ptep = pte_offset_kernel(pmdp, kaddr);
 
@@ -976,13 +977,13 @@ static u64 __init memblock_nid_range_sun4u(u64 start, u64 end, int *nid)
 {
 	int prev_nid, new_nid;
 
-	prev_nid = -1;
+	prev_nid = NUMA_NO_NODE;
 	for ( ; start < end; start += PAGE_SIZE) {
 		for (new_nid = 0; new_nid < num_node_masks; new_nid++) {
 			struct node_mem_mask *p = &node_masks[new_nid];
 
 			if ((start & p->mask) == p->match) {
-				if (prev_nid == -1)
+				if (prev_nid == NUMA_NO_NODE)
 					prev_nid = new_nid;
 				break;
 			}
@@ -1089,16 +1090,13 @@ static void __init allocate_node_data(int nid)
 	struct pglist_data *p;
 	unsigned long start_pfn, end_pfn;
 #ifdef CONFIG_NEED_MULTIPLE_NODES
-	unsigned long paddr;
 
-	paddr = memblock_phys_alloc_try_nid(sizeof(struct pglist_data),
-					    SMP_CACHE_BYTES, nid);
-	if (!paddr) {
+	NODE_DATA(nid) = memblock_alloc_node(sizeof(struct pglist_data),
+					     SMP_CACHE_BYTES, nid);
+	if (!NODE_DATA(nid)) {
 		prom_printf("Cannot allocate pglist_data for nid[%d]\n", nid);
 		prom_halt();
 	}
-	NODE_DATA(nid) = __va(paddr);
-	memset(NODE_DATA(nid), 0, sizeof(struct pglist_data));
 
 	NODE_DATA(nid)->node_id = nid;
 #endif
@@ -1208,7 +1206,7 @@ int of_node_to_nid(struct device_node *dp)
 	md = mdesc_grab();
 
 	count = 0;
-	nid = -1;
+	nid = NUMA_NO_NODE;
 	mdesc_for_each_node_by_name(md, grp, "group") {
 		if (!scan_arcs_for_cfg_handle(md, grp, cfg_handle)) {
 			nid = count;
@@ -1656,6 +1654,7 @@ static unsigned long max_phys_bits = 40;
 bool kern_addr_valid(unsigned long addr)
 {
 	pgd_t *pgd;
+	p4d_t *p4d;
 	pud_t *pud;
 	pmd_t *pmd;
 	pte_t *pte;
@@ -1677,7 +1676,11 @@ bool kern_addr_valid(unsigned long addr)
 	if (pgd_none(*pgd))
 		return 0;
 
-	pud = pud_offset(pgd, addr);
+	p4d = p4d_offset(pgd, addr);
+	if (p4d_none(*p4d))
+		return 0;
+
+	pud = pud_offset(p4d, addr);
 	if (pud_none(*pud))
 		return 0;
 
@@ -1803,6 +1806,7 @@ static unsigned long __ref kernel_map_range(unsigned long pstart,
 	while (vstart < vend) {
 		unsigned long this_end, paddr = __pa(vstart);
 		pgd_t *pgd = pgd_offset_k(vstart);
+		p4d_t *p4d;
 		pud_t *pud;
 		pmd_t *pmd;
 		pte_t *pte;
@@ -1812,10 +1816,25 @@ static unsigned long __ref kernel_map_range(unsigned long pstart,
 
 			new = memblock_alloc_from(PAGE_SIZE, PAGE_SIZE,
 						  PAGE_SIZE);
+			if (!new)
+				goto err_alloc;
 			alloc_bytes += PAGE_SIZE;
 			pgd_populate(&init_mm, pgd, new);
 		}
-		pud = pud_offset(pgd, vstart);
+
+		p4d = p4d_offset(pgd, vstart);
+		if (p4d_none(*p4d)) {
+			pud_t *new;
+
+			new = memblock_alloc_from(PAGE_SIZE, PAGE_SIZE,
+						  PAGE_SIZE);
+			if (!new)
+				goto err_alloc;
+			alloc_bytes += PAGE_SIZE;
+			p4d_populate(&init_mm, p4d, new);
+		}
+
+		pud = pud_offset(p4d, vstart);
 		if (pud_none(*pud)) {
 			pmd_t *new;
 
@@ -1825,6 +1844,8 @@ static unsigned long __ref kernel_map_range(unsigned long pstart,
 			}
 			new = memblock_alloc_from(PAGE_SIZE, PAGE_SIZE,
 						  PAGE_SIZE);
+			if (!new)
+				goto err_alloc;
 			alloc_bytes += PAGE_SIZE;
 			pud_populate(&init_mm, pud, new);
 		}
@@ -1839,6 +1860,8 @@ static unsigned long __ref kernel_map_range(unsigned long pstart,
 			}
 			new = memblock_alloc_from(PAGE_SIZE, PAGE_SIZE,
 						  PAGE_SIZE);
+			if (!new)
+				goto err_alloc;
 			alloc_bytes += PAGE_SIZE;
 			pmd_populate_kernel(&init_mm, pmd, new);
 		}
@@ -1858,6 +1881,11 @@ static unsigned long __ref kernel_map_range(unsigned long pstart,
 	}
 
 	return alloc_bytes;
+
+err_alloc:
+	panic("%s: Failed to allocate %lu bytes align=%lx from=%lx\n",
+	      __func__, PAGE_SIZE, PAGE_SIZE, PAGE_SIZE);
+	return -ENOMEM;
 }
 
 static void __init flush_all_kernel_tsbs(void)
@@ -2261,19 +2289,6 @@ static unsigned long last_valid_pfn;
 static void sun4u_pgprot_init(void);
 static void sun4v_pgprot_init(void);
 
-static phys_addr_t __init available_memory(void)
-{
-	phys_addr_t available = 0ULL;
-	phys_addr_t pa_start, pa_end;
-	u64 i;
-
-	for_each_free_mem_range(i, NUMA_NO_NODE, MEMBLOCK_NONE, &pa_start,
-				&pa_end, NULL)
-		available = available + (pa_end  - pa_start);
-
-	return available;
-}
-
 #define _PAGE_CACHE_4U	(_PAGE_CP_4U | _PAGE_CV_4U)
 #define _PAGE_CACHE_4V	(_PAGE_CP_4V | _PAGE_CV_4V)
 #define __DIRTY_BITS_4U	 (_PAGE_MODIFIED_4U | _PAGE_WRITE_4U | _PAGE_W_4U)
@@ -2287,33 +2302,8 @@ static phys_addr_t __init available_memory(void)
  */
 static void __init reduce_memory(phys_addr_t limit_ram)
 {
-	phys_addr_t avail_ram = available_memory();
-	phys_addr_t pa_start, pa_end;
-	u64 i;
-
-	if (limit_ram >= avail_ram)
-		return;
-
-	for_each_free_mem_range(i, NUMA_NO_NODE, MEMBLOCK_NONE, &pa_start,
-				&pa_end, NULL) {
-		phys_addr_t region_size = pa_end - pa_start;
-		phys_addr_t clip_start = pa_start;
-
-		avail_ram = avail_ram - region_size;
-		/* Are we consuming too much? */
-		if (avail_ram < limit_ram) {
-			phys_addr_t give_back = limit_ram - avail_ram;
-
-			region_size = region_size - give_back;
-			clip_start = clip_start + give_back;
-		}
-
-		memblock_remove(clip_start, region_size);
-
-		if (avail_ram <= limit_ram)
-			break;
-		i = 0UL;
-	}
+	limit_ram += memblock_reserved_size();
+	memblock_enforce_memory_limit(limit_ram);
 }
 
 void __init paging_init(void)
@@ -2602,14 +2592,6 @@ void free_initmem(void)
 	}
 }
 
-#ifdef CONFIG_BLK_DEV_INITRD
-void free_initrd_mem(unsigned long start, unsigned long end)
-{
-	free_reserved_area((void *)start, (void *)end, POISON_FREE_INITMEM,
-			   "initrd");
-}
-#endif
-
 pgprot_t PAGE_KERNEL __read_mostly;
 EXPORT_SYMBOL(PAGE_KERNEL);
 
@@ -2650,13 +2632,18 @@ int __meminit vmemmap_populate(unsigned long vstart, unsigned long vend,
 	for (; vstart < vend; vstart += PMD_SIZE) {
 		pgd_t *pgd = vmemmap_pgd_populate(vstart, node);
 		unsigned long pte;
+		p4d_t *p4d;
 		pud_t *pud;
 		pmd_t *pmd;
 
 		if (!pgd)
 			return -ENOMEM;
 
-		pud = vmemmap_pud_populate(pgd, vstart, node);
+		p4d = vmemmap_p4d_populate(pgd, vstart, node);
+		if (!p4d)
+			return -ENOMEM;
+
+		pud = vmemmap_pud_populate(p4d, vstart, node);
 		if (!pud)
 			return -ENOMEM;
 
@@ -2941,7 +2928,7 @@ pgtable_t pte_alloc_one(struct mm_struct *mm)
 	struct page *page = alloc_page(GFP_KERNEL | __GFP_ZERO);
 	if (!page)
 		return NULL;
-	if (!pgtable_page_ctor(page)) {
+	if (!pgtable_pte_page_ctor(page)) {
 		free_unref_page(page);
 		return NULL;
 	}
@@ -2957,7 +2944,7 @@ static void __pte_free(pgtable_t pte)
 {
 	struct page *page = virt_to_page(pte);
 
-	pgtable_page_dtor(page);
+	pgtable_pte_page_dtor(page);
 	__free_page(page);
 }
 

@@ -63,7 +63,7 @@ int smc_cdc_get_free_slot(struct smc_connection *conn,
 	rc = smc_wr_tx_get_free_slot(link, smc_cdc_tx_handler, wr_buf,
 				     wr_rdma_buf,
 				     (struct smc_wr_tx_pend_priv **)pend);
-	if (!conn->alert_token_local)
+	if (conn->killed)
 		/* abnormal termination */
 		rc = -EPIPE;
 	return rc;
@@ -103,8 +103,10 @@ int smc_cdc_msg_send(struct smc_connection *conn,
 	conn->local_tx_ctrl.seqno = conn->tx_cdc_seq;
 	smc_host_msg_to_cdc((struct smc_cdc_msg *)wr_buf, conn, &cfed);
 	rc = smc_wr_tx_send(link, (struct smc_wr_tx_pend_priv *)pend);
-	if (!rc)
+	if (!rc) {
 		smc_curs_copy(&conn->rx_curs_confirmed, &cfed, conn);
+		conn->local_rx_ctrl.prod_flags.cons_curs_upd_req = 0;
+	}
 
 	return rc;
 }
@@ -128,6 +130,9 @@ static int smcr_cdc_get_slot_and_msg_send(struct smc_connection *conn)
 int smc_cdc_get_slot_and_msg_send(struct smc_connection *conn)
 {
 	int rc;
+
+	if (!conn->lgr || (conn->lgr->is_smcd && conn->lgr->peer_shutdown))
+		return -EPIPE;
 
 	if (conn->lgr->is_smcd) {
 		spin_lock_bh(&conn->send_lock);
@@ -192,6 +197,7 @@ int smcd_cdc_msg_send(struct smc_connection *conn)
 	if (rc)
 		return rc;
 	smc_curs_copy(&conn->rx_curs_confirmed, &curs, conn);
+	conn->local_rx_ctrl.prod_flags.cons_curs_upd_req = 0;
 	/* Calculate transmitted data and increment free send buffer space */
 	diff = smc_curs_diff(conn->sndbuf_desc->len, &conn->tx_curs_fin,
 			     &conn->tx_curs_sent);
@@ -268,26 +274,18 @@ static void smc_cdc_msg_recv_action(struct smc_sock *smc,
 		smp_mb__after_atomic();
 		smc->sk.sk_data_ready(&smc->sk);
 	} else {
-		if (conn->local_rx_ctrl.prod_flags.write_blocked ||
-		    conn->local_rx_ctrl.prod_flags.cons_curs_upd_req ||
-		    conn->local_rx_ctrl.prod_flags.urg_data_pending) {
-			if (conn->local_rx_ctrl.prod_flags.urg_data_pending)
-				conn->urg_state = SMC_URG_NOTYET;
-			/* force immediate tx of current consumer cursor, but
-			 * under send_lock to guarantee arrival in seqno-order
-			 */
-			if (smc->sk.sk_state != SMC_INIT)
-				smc_tx_sndbuf_nonempty(conn);
-		}
+		if (conn->local_rx_ctrl.prod_flags.write_blocked)
+			smc->sk.sk_data_ready(&smc->sk);
+		if (conn->local_rx_ctrl.prod_flags.urg_data_pending)
+			conn->urg_state = SMC_URG_NOTYET;
 	}
 
-	/* piggy backed tx info */
 	/* trigger sndbuf consumer: RDMA write into peer RMBE and CDC */
-	if (diff_cons && smc_tx_prepared_sends(conn)) {
+	if ((diff_cons && smc_tx_prepared_sends(conn)) ||
+	    conn->local_rx_ctrl.prod_flags.cons_curs_upd_req ||
+	    conn->local_rx_ctrl.prod_flags.urg_data_pending)
 		smc_tx_sndbuf_nonempty(conn);
-		/* trigger socket release if connection closed */
-		smc_close_wake_tx_prepared(smc);
-	}
+
 	if (diff_cons && conn->urg_tx_pend &&
 	    atomic_read(&conn->peer_rmbe_space) == conn->peer_rmbe_size) {
 		/* urg data confirmed by peer, indicate we're ready for more */
@@ -333,7 +331,7 @@ static void smcd_cdc_rx_tsklet(unsigned long data)
 	struct smcd_cdc_msg cdc;
 	struct smc_sock *smc;
 
-	if (!conn)
+	if (!conn || conn->killed)
 		return;
 
 	data_cdc = (struct smcd_cdc_msg *)conn->rmb_desc->cpu_addr;
