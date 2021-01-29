@@ -15,7 +15,6 @@
 #include <linux/hashtable.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <unistd.h>
 
 #include "json_writer.h"
 #include "main.h"
@@ -358,9 +357,15 @@ static int dump_btf_raw(const struct btf *btf,
 			dump_btf_type(btf, root_type_ids[i], t);
 		}
 	} else {
+		const struct btf *base;
 		int cnt = btf__get_nr_types(btf);
+		int start_id = 1;
 
-		for (i = 1; i <= cnt; i++) {
+		base = btf__base_btf(btf);
+		if (base)
+			start_id = btf__get_nr_types(base) + 1;
+
+		for (i = start_id; i <= cnt; i++) {
 			t = btf__type_by_id(btf, i);
 			dump_btf_type(btf, i, t);
 		}
@@ -423,57 +428,9 @@ done:
 	return err;
 }
 
-static struct btf *btf__parse_raw(const char *file)
-{
-	struct btf *btf;
-	struct stat st;
-	__u8 *buf;
-	FILE *f;
-
-	if (stat(file, &st))
-		return NULL;
-
-	f = fopen(file, "rb");
-	if (!f)
-		return NULL;
-
-	buf = malloc(st.st_size);
-	if (!buf) {
-		btf = ERR_PTR(-ENOMEM);
-		goto exit_close;
-	}
-
-	if ((size_t) st.st_size != fread(buf, 1, st.st_size, f)) {
-		btf = ERR_PTR(-EINVAL);
-		goto exit_free;
-	}
-
-	btf = btf__new(buf, st.st_size);
-
-exit_free:
-	free(buf);
-exit_close:
-	fclose(f);
-	return btf;
-}
-
-static bool is_btf_raw(const char *file)
-{
-	__u16 magic = 0;
-	int fd, nb_read;
-
-	fd = open(file, O_RDONLY);
-	if (fd < 0)
-		return false;
-
-	nb_read = read(fd, &magic, sizeof(magic));
-	close(fd);
-	return nb_read == sizeof(magic) && magic == BTF_MAGIC;
-}
-
 static int do_dump(int argc, char **argv)
 {
-	struct btf *btf = NULL;
+	struct btf *btf = NULL, *base = NULL;
 	__u32 root_type_ids[2];
 	int root_type_cnt = 0;
 	bool dump_c = false;
@@ -487,7 +444,6 @@ static int do_dump(int argc, char **argv)
 		return -1;
 	}
 	src = GET_ARG();
-
 	if (is_prefix(src, "map")) {
 		struct bpf_map_info info = {};
 		__u32 len = sizeof(info);
@@ -548,13 +504,23 @@ static int do_dump(int argc, char **argv)
 		}
 		NEXT_ARG();
 	} else if (is_prefix(src, "file")) {
-		if (is_btf_raw(*argv))
-			btf = btf__parse_raw(*argv);
-		else
-			btf = btf__parse_elf(*argv, NULL);
+		const char sysfs_prefix[] = "/sys/kernel/btf/";
+		const char sysfs_vmlinux[] = "/sys/kernel/btf/vmlinux";
 
+		if (!base_btf &&
+		    strncmp(*argv, sysfs_prefix, sizeof(sysfs_prefix) - 1) == 0 &&
+		    strcmp(*argv, sysfs_vmlinux) != 0) {
+			base = btf__parse(sysfs_vmlinux, NULL);
+			if (libbpf_get_error(base)) {
+				p_err("failed to parse vmlinux BTF at '%s': %ld\n",
+				      sysfs_vmlinux, libbpf_get_error(base));
+				base = NULL;
+			}
+		}
+
+		btf = btf__parse_split(*argv, base ?: base_btf);
 		if (IS_ERR(btf)) {
-			err = PTR_ERR(btf);
+			err = -PTR_ERR(btf);
 			btf = NULL;
 			p_err("failed to load BTF from %s: %s",
 			      *argv, strerror(err));
@@ -597,7 +563,7 @@ static int do_dump(int argc, char **argv)
 			goto done;
 		}
 		if (!btf) {
-			err = ENOENT;
+			err = -ENOENT;
 			p_err("can't find btf with ID (%u)", btf_id);
 			goto done;
 		}
@@ -617,6 +583,7 @@ static int do_dump(int argc, char **argv)
 done:
 	close(fd);
 	btf__free(btf);
+	btf__free(base);
 	return err;
 }
 
@@ -746,6 +713,7 @@ build_btf_type_table(struct btf_attach_table *tab, enum bpf_obj_type type,
 		obj_node = calloc(1, sizeof(*obj_node));
 		if (!obj_node) {
 			p_err("failed to allocate memory: %s", strerror(errno));
+			err = -ENOMEM;
 			goto err_free;
 		}
 
@@ -792,9 +760,16 @@ show_btf_plain(struct bpf_btf_info *info, int fd,
 	       struct btf_attach_table *btf_map_table)
 {
 	struct btf_attach_point *obj;
+	const char *name = u64_to_ptr(info->name);
 	int n;
 
 	printf("%u: ", info->id);
+	if (info->kernel_btf)
+		printf("name [%s]  ", name);
+	else if (name && name[0])
+		printf("name %s  ", name);
+	else
+		printf("name <anon>  ");
 	printf("size %uB", info->btf_size);
 
 	n = 0;
@@ -810,6 +785,7 @@ show_btf_plain(struct bpf_btf_info *info, int fd,
 			printf("%s%u", n++ == 0 ? "  map_ids " : ",",
 			       obj->obj_id);
 	}
+	emit_obj_refs_plain(&refs_table, info->id, "\n\tpids ");
 
 	printf("\n");
 }
@@ -820,6 +796,7 @@ show_btf_json(struct bpf_btf_info *info, int fd,
 	      struct btf_attach_table *btf_map_table)
 {
 	struct btf_attach_point *obj;
+	const char *name = u64_to_ptr(info->name);
 
 	jsonw_start_object(json_wtr);	/* btf object */
 	jsonw_uint_field(json_wtr, "id", info->id);
@@ -842,6 +819,14 @@ show_btf_json(struct bpf_btf_info *info, int fd,
 			jsonw_uint(json_wtr, obj->obj_id);
 	}
 	jsonw_end_array(json_wtr);	/* map_ids */
+
+	emit_obj_refs_json(&refs_table, info->id, json_wtr); /* pids */
+
+	jsonw_bool_field(json_wtr, "kernel", info->kernel_btf);
+
+	if (name && name[0])
+		jsonw_string_field(json_wtr, "name", name);
+
 	jsonw_end_object(json_wtr);	/* btf object */
 }
 
@@ -849,14 +834,29 @@ static int
 show_btf(int fd, struct btf_attach_table *btf_prog_table,
 	 struct btf_attach_table *btf_map_table)
 {
-	struct bpf_btf_info info = {};
+	struct bpf_btf_info info;
 	__u32 len = sizeof(info);
+	char name[64];
 	int err;
 
+	memset(&info, 0, sizeof(info));
 	err = bpf_obj_get_info_by_fd(fd, &info, &len);
 	if (err) {
 		p_err("can't get BTF object info: %s", strerror(errno));
 		return -1;
+	}
+	/* if kernel support emitting BTF object name, pass name pointer */
+	if (info.name_len) {
+		memset(&info, 0, sizeof(info));
+		info.name_len = sizeof(name);
+		info.name = ptr_to_u64(name);
+		len = sizeof(info);
+
+		err = bpf_obj_get_info_by_fd(fd, &info, &len);
+		if (err) {
+			p_err("can't get BTF object info: %s", strerror(errno));
+			return -1;
+		}
 	}
 
 	if (json_output)
@@ -894,6 +894,7 @@ static int do_show(int argc, char **argv)
 			close(fd);
 		return err;
 	}
+	build_obj_refs_table(&refs_table, BPF_OBJ_BTF);
 
 	if (fd >= 0) {
 		err = show_btf(fd, &btf_prog_table, &btf_map_table);
@@ -940,6 +941,7 @@ static int do_show(int argc, char **argv)
 exit_free:
 	delete_btf_table(&btf_prog_table);
 	delete_btf_table(&btf_map_table);
+	delete_obj_refs_table(&refs_table);
 
 	return err;
 }
@@ -952,9 +954,9 @@ static int do_help(int argc, char **argv)
 	}
 
 	fprintf(stderr,
-		"Usage: %s btf { show | list } [id BTF_ID]\n"
-		"       %s btf dump BTF_SRC [format FORMAT]\n"
-		"       %s btf help\n"
+		"Usage: %1$s %2$s { show | list } [id BTF_ID]\n"
+		"       %1$s %2$s dump BTF_SRC [format FORMAT]\n"
+		"       %1$s %2$s help\n"
 		"\n"
 		"       BTF_SRC := { id BTF_ID | prog PROG | map MAP [{key | value | kv | all}] | file FILE }\n"
 		"       FORMAT  := { raw | c }\n"
@@ -962,7 +964,7 @@ static int do_help(int argc, char **argv)
 		"       " HELP_SPEC_PROGRAM "\n"
 		"       " HELP_SPEC_OPTIONS "\n"
 		"",
-		bin_name, bin_name, bin_name);
+		bin_name, "btf");
 
 	return 0;
 }

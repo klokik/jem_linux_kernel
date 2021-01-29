@@ -40,6 +40,16 @@ trace_boot_set_instance_options(struct trace_array *tr, struct xbc_node *node)
 			pr_err("Failed to set option: %s\n", buf);
 	}
 
+	p = xbc_node_find_value(node, "tracing_on", NULL);
+	if (p && *p != '\0') {
+		if (kstrtoul(p, 10, &v))
+			pr_err("Failed to set tracing on: %s\n", p);
+		if (v)
+			tracer_tracing_on(tr);
+		else
+			tracer_tracing_off(tr);
+	}
+
 	p = xbc_node_find_value(node, "trace_clock", NULL);
 	if (p && *p != '\0') {
 		if (tracing_set_clock(tr, p) < 0)
@@ -95,23 +105,23 @@ trace_boot_add_kprobe_event(struct xbc_node *node, const char *event)
 	struct xbc_node *anode;
 	char buf[MAX_BUF_LEN];
 	const char *val;
-	int ret;
-
-	kprobe_event_cmd_init(&cmd, buf, MAX_BUF_LEN);
-
-	ret = kprobe_event_gen_cmd_start(&cmd, event, NULL);
-	if (ret)
-		return ret;
+	int ret = 0;
 
 	xbc_node_for_each_array_value(node, "probes", anode, val) {
-		ret = kprobe_event_add_field(&cmd, val);
-		if (ret)
-			return ret;
-	}
+		kprobe_event_cmd_init(&cmd, buf, MAX_BUF_LEN);
 
-	ret = kprobe_event_gen_cmd_end(&cmd);
-	if (ret)
-		pr_err("Failed to add probe: %s\n", buf);
+		ret = kprobe_event_gen_cmd_start(&cmd, event, val);
+		if (ret) {
+			pr_err("Failed to generate probe: %s\n", buf);
+			break;
+		}
+
+		ret = kprobe_event_gen_cmd_end(&cmd);
+		if (ret) {
+			pr_err("Failed to add probe: %s\n", buf);
+			break;
+		}
+	}
 
 	return ret;
 }
@@ -124,7 +134,7 @@ trace_boot_add_kprobe_event(struct xbc_node *node, const char *event)
 }
 #endif
 
-#ifdef CONFIG_HIST_TRIGGERS
+#ifdef CONFIG_SYNTH_EVENTS
 static int __init
 trace_boot_add_synth_event(struct xbc_node *node, const char *event)
 {
@@ -274,6 +284,12 @@ trace_boot_enable_tracer(struct trace_array *tr, struct xbc_node *node)
 		if (tracing_set_tracer(tr, p) < 0)
 			pr_err("Failed to set given tracer: %s\n", p);
 	}
+
+	/* Since tracer can free snapshot buffer, allocate snapshot here.*/
+	if (xbc_node_find_value(node, "alloc_snapshot", NULL)) {
+		if (tracing_alloc_snapshot_instance(tr) < 0)
+			pr_err("Failed to allocate snapshot buffer\n");
+	}
 }
 
 static void __init
@@ -328,7 +344,12 @@ static int __init trace_boot_init(void)
 	trace_boot_init_one_instance(tr, trace_node);
 	trace_boot_init_instances(trace_node);
 
+	disable_tracing_selftest("running boot-time tracing");
+
 	return 0;
 }
-
-fs_initcall(trace_boot_init);
+/*
+ * Start tracing at the end of core-initcall, so that it starts tracing
+ * from the beginning of postcore_initcall.
+ */
+core_initcall_sync(trace_boot_init);

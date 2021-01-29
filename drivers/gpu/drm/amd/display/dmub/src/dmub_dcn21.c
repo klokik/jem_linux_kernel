@@ -23,7 +23,7 @@
  *
  */
 
-#include "../inc/dmub_srv.h"
+#include "../dmub_srv.h"
 #include "dmub_reg.h"
 #include "dmub_dcn21.h"
 
@@ -52,11 +52,6 @@ const struct dmub_srv_common_regs dmub_srv_dcn21_regs = {
 };
 
 /* Shared functions. */
-
-bool dmub_dcn21_is_auto_load_done(struct dmub_srv *dmub)
-{
-	return (REG_READ(DMCUB_SCRATCH0) == 3);
-}
 
 bool dmub_dcn21_is_phy_init(struct dmub_srv *dmub)
 {

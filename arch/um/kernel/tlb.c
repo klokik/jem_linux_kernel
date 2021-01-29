@@ -7,7 +7,6 @@
 #include <linux/module.h>
 #include <linux/sched/signal.h>
 
-#include <asm/pgtable.h>
 #include <asm/tlbflush.h>
 #include <as-layout.h>
 #include <mem_user.h>
@@ -349,8 +348,8 @@ void fix_range_common(struct mm_struct *mm, unsigned long start_addr,
 	if (ret) {
 		printk(KERN_ERR "fix_range_common: failed, killing current "
 		       "process: %d\n", task_tgid_vnr(current));
-		/* We are under mmap_sem, release it such that current can terminate */
-		up_write(&current->mm->mmap_sem);
+		/* We are under mmap_lock, release it such that current can terminate */
+		mmap_write_unlock(current->mm);
 		force_sig(SIGKILL);
 		do_signal(&current->thread.regs);
 	}
@@ -608,4 +607,58 @@ void force_flush_all(void)
 		fix_range(mm, vma->vm_start, vma->vm_end, 1);
 		vma = vma->vm_next;
 	}
+}
+
+struct page_change_data {
+	unsigned int set_mask, clear_mask;
+};
+
+static int change_page_range(pte_t *ptep, unsigned long addr, void *data)
+{
+	struct page_change_data *cdata = data;
+	pte_t pte = READ_ONCE(*ptep);
+
+	pte_clear_bits(pte, cdata->clear_mask);
+	pte_set_bits(pte, cdata->set_mask);
+
+	set_pte(ptep, pte);
+	return 0;
+}
+
+static int change_memory(unsigned long start, unsigned long pages,
+			 unsigned int set_mask, unsigned int clear_mask)
+{
+	unsigned long size = pages * PAGE_SIZE;
+	struct page_change_data data;
+	int ret;
+
+	data.set_mask = set_mask;
+	data.clear_mask = clear_mask;
+
+	ret = apply_to_page_range(&init_mm, start, size, change_page_range,
+				  &data);
+
+	flush_tlb_kernel_range(start, start + size);
+
+	return ret;
+}
+
+int set_memory_ro(unsigned long addr, int numpages)
+{
+	return change_memory(addr, numpages, 0, _PAGE_RW);
+}
+
+int set_memory_rw(unsigned long addr, int numpages)
+{
+	return change_memory(addr, numpages, _PAGE_RW, 0);
+}
+
+int set_memory_nx(unsigned long addr, int numpages)
+{
+	return -EOPNOTSUPP;
+}
+
+int set_memory_x(unsigned long addr, int numpages)
+{
+	return -EOPNOTSUPP;
 }

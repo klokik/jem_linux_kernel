@@ -50,7 +50,7 @@ static inline void submit_dmub_read_modify_write(
 	gather = ctx->dmub_srv->reg_helper_offload.gather_in_progress;
 	ctx->dmub_srv->reg_helper_offload.gather_in_progress = false;
 
-	dc_dmub_srv_cmd_queue(ctx->dmub_srv, &cmd_buf->header);
+	dc_dmub_srv_cmd_queue(ctx->dmub_srv, &offload->cmd_data);
 
 	ctx->dmub_srv->reg_helper_offload.gather_in_progress = gather;
 
@@ -73,7 +73,7 @@ static inline void submit_dmub_burst_write(
 	gather = ctx->dmub_srv->reg_helper_offload.gather_in_progress;
 	ctx->dmub_srv->reg_helper_offload.gather_in_progress = false;
 
-	dc_dmub_srv_cmd_queue(ctx->dmub_srv, &cmd_buf->header);
+	dc_dmub_srv_cmd_queue(ctx->dmub_srv, &offload->cmd_data);
 
 	ctx->dmub_srv->reg_helper_offload.gather_in_progress = gather;
 
@@ -92,7 +92,7 @@ static inline void submit_dmub_reg_wait(
 	gather = ctx->dmub_srv->reg_helper_offload.gather_in_progress;
 	ctx->dmub_srv->reg_helper_offload.gather_in_progress = false;
 
-	dc_dmub_srv_cmd_queue(ctx->dmub_srv, &cmd_buf->header);
+	dc_dmub_srv_cmd_queue(ctx->dmub_srv, &offload->cmd_data);
 
 	memset(cmd_buf, 0, sizeof(*cmd_buf));
 	offload->reg_seq_count = 0;
@@ -294,32 +294,6 @@ uint32_t generic_reg_set_ex(const struct dc_context *ctx,
 
 	dm_write_reg(ctx, addr, reg_val);
 	return reg_val;
-}
-
-uint32_t dm_read_reg_func(
-	const struct dc_context *ctx,
-	uint32_t address,
-	const char *func_name)
-{
-	uint32_t value;
-#ifdef DM_CHECK_ADDR_0
-	if (address == 0) {
-		DC_ERR("invalid register read; address = 0\n");
-		return 0;
-	}
-#endif
-
-	if (ctx->dmub_srv &&
-	    ctx->dmub_srv->reg_helper_offload.gather_in_progress &&
-	    !ctx->dmub_srv->reg_helper_offload.should_burst_write) {
-		ASSERT(false);
-		return 0;
-	}
-
-	value = cgs_read_register(ctx->cgs_device, address);
-	trace_amdgpu_dc_rreg(&ctx->perf_trace->read_count, address, value);
-
-	return value;
 }
 
 uint32_t generic_reg_get(const struct dc_context *ctx, uint32_t addr,

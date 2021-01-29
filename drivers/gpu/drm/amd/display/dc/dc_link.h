@@ -66,6 +66,22 @@ struct time_stamp {
 struct link_trace {
 	struct time_stamp time_stamp;
 };
+
+/* PSR feature flags */
+struct psr_settings {
+	bool psr_feature_enabled;		// PSR is supported by sink
+	bool psr_allow_active;			// PSR is currently active
+	enum dc_psr_version psr_version;		// Internal PSR version, determined based on DPCD
+
+	/* These parameters are calculated in Driver,
+	 * based on display timing and Sink capabilities.
+	 * If VBLANK region is too small and Sink takes a long time
+	 * to set up RFB, it may take an extra frame to enter PSR state.
+	 */
+	bool psr_frame_capture_indication_req;
+	unsigned int psr_sdp_transmit_line_num_deadline;
+};
+
 /*
  * A link contains one or more sinks and their connected status.
  * The currently active signal type (HDMI, DP-SST, DP-MST) is also reported.
@@ -84,7 +100,8 @@ struct dc_link {
 	bool link_state_valid;
 	bool aux_access_disabled;
 	bool sync_lt_in_progress;
-	bool is_lttpr_mode_transparent;
+	bool lttpr_non_transparent_mode;
+	bool is_internal_display;
 
 	/* caps is the same as reported_link_cap. link_traing use
 	 * reported_link_cap. Will clean up.  TODO
@@ -118,6 +135,7 @@ struct dc_link {
 
 	struct dc_context *ctx;
 
+	struct panel_cntl *panel_cntl;
 	struct link_encoder *link_enc;
 	struct graphics_object_id link_id;
 	union ddi_channel_mapping ddi_channel_mapping;
@@ -126,10 +144,13 @@ struct dc_link {
 	uint32_t dongle_max_pix_clk;
 	unsigned short chip_caps;
 	unsigned int dpcd_sink_count;
+#if defined(CONFIG_DRM_AMD_DC_HDCP)
+	struct hdcp_caps hdcp_caps;
+#endif
 	enum edp_revision edp_revision;
-	bool psr_feature_enabled;
-	bool psr_allow_active;
 	union dpcd_sink_ext_caps dpcd_sink_ext_caps;
+
+	struct psr_settings psr_settings;
 
 	/* MST record stream using this link */
 	struct link_flags {
@@ -197,15 +218,18 @@ bool dc_link_set_default_brightness_aux(struct dc_link *link);
 
 int dc_link_get_backlight_level(const struct dc_link *dc_link);
 
-bool dc_link_set_abm_disable(const struct dc_link *dc_link);
+int dc_link_get_target_backlight_pwm(const struct dc_link *link);
 
-bool dc_link_set_psr_allow_active(struct dc_link *dc_link, bool enable, bool wait);
+bool dc_link_set_psr_allow_active(struct dc_link *dc_link, bool enable,
+		bool wait, bool force_static);
 
-bool dc_link_get_psr_state(const struct dc_link *dc_link, uint32_t *psr_state);
+bool dc_link_get_psr_state(const struct dc_link *dc_link, enum dc_psr_state *state);
 
 bool dc_link_setup_psr(struct dc_link *dc_link,
 		const struct dc_stream_state *stream, struct psr_config *psr_config,
 		struct psr_context *psr_context);
+
+void dc_link_get_psr_residency(const struct dc_link *link, uint32_t *residency);
 
 /* Request DC to detect if there is a Panel connected.
  * boot - If this call is during initial boot.
@@ -217,6 +241,8 @@ enum dc_detect_reason {
 	DETECT_REASON_BOOT,
 	DETECT_REASON_HPD,
 	DETECT_REASON_HPDRX,
+	DETECT_REASON_FALLBACK,
+	DETECT_REASON_RETRAIN
 };
 
 bool dc_link_detect(struct dc_link *dc_link, enum dc_detect_reason reason);
@@ -232,6 +258,10 @@ enum dc_status dc_link_reallocate_mst_payload(struct dc_link *link);
  * from DM. */
 bool dc_link_handle_hpd_rx_irq(struct dc_link *dc_link,
 		union hpd_irq_data *hpd_irq_dpcd_data, bool *out_link_loss);
+
+enum dc_status read_hpd_rx_irq_data(
+	struct dc_link *link,
+	union hpd_irq_data *irq_data);
 
 struct dc_sink_init_data;
 
@@ -290,6 +320,10 @@ bool dc_link_detect_sink(struct dc_link *link, enum dc_connection_type *type);
  * DPCD access interfaces
  */
 
+#ifdef CONFIG_DRM_AMD_DC_HDCP
+bool dc_link_is_hdcp14(struct dc_link *link, enum signal_type signal);
+bool dc_link_is_hdcp22(struct dc_link *link, enum signal_type signal);
+#endif
 void dc_link_set_drive_settings(struct dc *dc,
 				struct link_training_settings *lt_settings,
 				const struct dc_link *link);

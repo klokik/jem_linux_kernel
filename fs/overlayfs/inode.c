@@ -10,6 +10,7 @@
 #include <linux/xattr.h>
 #include <linux/posix_acl.h>
 #include <linux/ratelimit.h>
+#include <linux/fiemap.h>
 #include "overlayfs.h"
 
 
@@ -57,6 +58,24 @@ int ovl_setattr(struct dentry *dentry, struct iattr *attr)
 
 		if (attr->ia_valid & (ATTR_KILL_SUID|ATTR_KILL_SGID))
 			attr->ia_valid &= ~ATTR_MODE;
+
+		/*
+		 * We might have to translate ovl file into real file object
+		 * once use cases emerge.  For now, simply don't let underlying
+		 * filesystem rely on attr->ia_file
+		 */
+		attr->ia_valid &= ~ATTR_FILE;
+
+		/*
+		 * If open(O_TRUNC) is done, VFS calls ->setattr with ATTR_OPEN
+		 * set.  Overlayfs does not pass O_TRUNC flag to underlying
+		 * filesystem during open -> do not pass ATTR_OPEN.  This
+		 * disables optimization in fuse which assumes open(O_TRUNC)
+		 * already set file size to 0.  But we never passed O_TRUNC to
+		 * fuse.  So by clearing ATTR_OPEN, fuse will be forced to send
+		 * setattr request to server.
+		 */
+		attr->ia_valid &= ~ATTR_OPEN;
 
 		inode_lock(upperdentry->d_inode);
 		old_cred = ovl_override_creds(dentry->d_sb);
@@ -308,10 +327,16 @@ static const char *ovl_get_link(struct dentry *dentry,
 	return p;
 }
 
-bool ovl_is_private_xattr(const char *name)
+bool ovl_is_private_xattr(struct super_block *sb, const char *name)
 {
-	return strncmp(name, OVL_XATTR_PREFIX,
-		       sizeof(OVL_XATTR_PREFIX) - 1) == 0;
+	struct ovl_fs *ofs = sb->s_fs_info;
+
+	if (ofs->config.userxattr)
+		return strncmp(name, OVL_XATTR_USER_PREFIX,
+			       sizeof(OVL_XATTR_USER_PREFIX) - 1) == 0;
+	else
+		return strncmp(name, OVL_XATTR_TRUSTED_PREFIX,
+			       sizeof(OVL_XATTR_TRUSTED_PREFIX) - 1) == 0;
 }
 
 int ovl_xattr_set(struct dentry *dentry, struct inode *inode, const char *name,
@@ -372,15 +397,18 @@ int ovl_xattr_get(struct dentry *dentry, struct inode *inode, const char *name,
 	return res;
 }
 
-static bool ovl_can_list(const char *s)
+static bool ovl_can_list(struct super_block *sb, const char *s)
 {
+	/* Never list private (.overlay) */
+	if (ovl_is_private_xattr(sb, s))
+		return false;
+
 	/* List all non-trusted xatts */
 	if (strncmp(s, XATTR_TRUSTED_PREFIX, XATTR_TRUSTED_PREFIX_LEN) != 0)
 		return true;
 
-	/* Never list trusted.overlay, list other trusted for superuser only */
-	return !ovl_is_private_xattr(s) &&
-	       ns_capable_noaudit(&init_user_ns, CAP_SYS_ADMIN);
+	/* list other trusted for superuser only */
+	return ns_capable_noaudit(&init_user_ns, CAP_SYS_ADMIN);
 }
 
 ssize_t ovl_listxattr(struct dentry *dentry, char *list, size_t size)
@@ -406,7 +434,7 @@ ssize_t ovl_listxattr(struct dentry *dentry, char *list, size_t size)
 			return -EIO;
 
 		len -= slen;
-		if (!ovl_can_list(s)) {
+		if (!ovl_can_list(dentry->d_sb, s)) {
 			res -= slen;
 			memmove(s, s + slen, len);
 		} else {
@@ -438,7 +466,7 @@ int ovl_update_time(struct inode *inode, struct timespec64 *ts, int flags)
 	if (flags & S_ATIME) {
 		struct ovl_fs *ofs = inode->i_sb->s_fs_info;
 		struct path upperpath = {
-			.mnt = ofs->upper_mnt,
+			.mnt = ovl_upper_mnt(ofs),
 			.dentry = ovl_upperdentry_dereference(OVL_I(inode)),
 		};
 
@@ -454,17 +482,13 @@ static int ovl_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 		      u64 start, u64 len)
 {
 	int err;
-	struct inode *realinode = ovl_inode_real(inode);
+	struct inode *realinode = ovl_inode_realdata(inode);
 	const struct cred *old_cred;
 
 	if (!realinode->i_op->fiemap)
 		return -EOPNOTSUPP;
 
 	old_cred = ovl_override_creds(inode->i_sb);
-
-	if (fieinfo->fi_flags & FIEMAP_FLAG_SYNC)
-		filemap_write_and_wait(realinode->i_mapping);
-
 	err = realinode->i_op->fiemap(realinode, fieinfo, start, len);
 	revert_creds(old_cred);
 
@@ -672,7 +696,7 @@ static void ovl_fill_inode(struct inode *inode, umode_t mode, dev_t rdev)
  * For the first, copy up case, the union nlink does not change, whether the
  * operation succeeds or fails, but the upper inode nlink may change.
  * Therefore, before copy up, we store the union nlink value relative to the
- * lower inode nlink in the index inode xattr trusted.overlay.nlink.
+ * lower inode nlink in the index inode xattr .overlay.nlink.
  *
  * For the second, upper hardlink case, the union nlink should be incremented
  * or decremented IFF the operation succeeds, aligned with nlink change of the
@@ -707,8 +731,8 @@ static int ovl_set_nlink_common(struct dentry *dentry,
 	if (WARN_ON(len >= sizeof(buf)))
 		return -EIO;
 
-	return ovl_do_setxattr(ovl_dentry_upper(dentry),
-			       OVL_XATTR_NLINK, buf, len, 0);
+	return ovl_do_setxattr(OVL_FS(inode->i_sb), ovl_dentry_upper(dentry),
+			       OVL_XATTR_NLINK, buf, len);
 }
 
 int ovl_set_nlink_upper(struct dentry *dentry)
@@ -721,7 +745,7 @@ int ovl_set_nlink_lower(struct dentry *dentry)
 	return ovl_set_nlink_common(dentry, ovl_dentry_lower(dentry), "L%+i");
 }
 
-unsigned int ovl_get_nlink(struct dentry *lowerdentry,
+unsigned int ovl_get_nlink(struct ovl_fs *ofs, struct dentry *lowerdentry,
 			   struct dentry *upperdentry,
 			   unsigned int fallback)
 {
@@ -733,7 +757,8 @@ unsigned int ovl_get_nlink(struct dentry *lowerdentry,
 	if (!lowerdentry || !upperdentry || d_inode(lowerdentry)->i_nlink == 1)
 		return fallback;
 
-	err = vfs_getxattr(upperdentry, OVL_XATTR_NLINK, &buf, sizeof(buf) - 1);
+	err = ovl_do_getxattr(ofs, upperdentry, OVL_XATTR_NLINK,
+			      &buf, sizeof(buf) - 1);
 	if (err < 0)
 		goto fail;
 
@@ -890,7 +915,7 @@ struct inode *ovl_get_trap_inode(struct super_block *sb, struct dentry *dir)
  * Does overlay inode need to be hashed by lower inode?
  */
 static bool ovl_hash_bylower(struct super_block *sb, struct dentry *upper,
-			     struct dentry *lower, struct dentry *index)
+			     struct dentry *lower, bool index)
 {
 	struct ovl_fs *ofs = sb->s_fs_info;
 
@@ -903,7 +928,7 @@ static bool ovl_hash_bylower(struct super_block *sb, struct dentry *upper,
 		return true;
 
 	/* Yes, if won't be copied up */
-	if (!ofs->upper_mnt)
+	if (!ovl_upper_mnt(ofs))
 		return true;
 
 	/* No, if lower hardlink is or will be broken on copy up */
@@ -931,6 +956,7 @@ static struct inode *ovl_iget5(struct super_block *sb, struct inode *newinode,
 struct inode *ovl_get_inode(struct super_block *sb,
 			    struct ovl_inode_params *oip)
 {
+	struct ovl_fs *ofs = OVL_FS(sb);
 	struct dentry *upperdentry = oip->upperdentry;
 	struct ovl_path *lowerpath = oip->lowerpath;
 	struct inode *realinode = upperdentry ? d_inode(upperdentry) : NULL;
@@ -939,7 +965,7 @@ struct inode *ovl_get_inode(struct super_block *sb,
 	bool bylower = ovl_hash_bylower(sb, upperdentry, lowerdentry,
 					oip->index);
 	int fsid = bylower ? lowerpath->layer->fsid : 0;
-	bool is_dir, metacopy = false;
+	bool is_dir;
 	unsigned long ino = 0;
 	int err = oip->newinode ? -EEXIST : -ENOMEM;
 
@@ -978,7 +1004,8 @@ struct inode *ovl_get_inode(struct super_block *sb,
 
 		/* Recalculate nlink for non-dir due to indexing */
 		if (!is_dir)
-			nlink = ovl_get_nlink(lowerdentry, upperdentry, nlink);
+			nlink = ovl_get_nlink(ofs, lowerdentry, upperdentry,
+					      nlink);
 		set_nlink(inode, nlink);
 		ino = key->i_ino;
 	} else {
@@ -994,20 +1021,11 @@ struct inode *ovl_get_inode(struct super_block *sb,
 	ovl_fill_inode(inode, realinode->i_mode, realinode->i_rdev);
 	ovl_inode_init(inode, oip, ino, fsid);
 
-	if (upperdentry && ovl_is_impuredir(upperdentry))
+	if (upperdentry && ovl_is_impuredir(sb, upperdentry))
 		ovl_set_flag(OVL_IMPURE, inode);
 
 	if (oip->index)
 		ovl_set_flag(OVL_INDEX, inode);
-
-	if (upperdentry) {
-		err = ovl_check_metacopy_xattr(upperdentry);
-		if (err < 0)
-			goto out_err;
-		metacopy = err;
-		if (!metacopy)
-			ovl_set_flag(OVL_UPPERDATA, inode);
-	}
 
 	OVL_I(inode)->redirect = oip->redirect;
 
@@ -1017,7 +1035,7 @@ struct inode *ovl_get_inode(struct super_block *sb,
 	/* Check for non-merge dir that may have whiteouts */
 	if (is_dir) {
 		if (((upperdentry && lowerdentry) || oip->numlower > 1) ||
-		    ovl_check_origin_xattr(upperdentry ?: lowerdentry)) {
+		    ovl_check_origin_xattr(ofs, upperdentry ?: lowerdentry)) {
 			ovl_set_flag(OVL_WHITEOUTS, inode);
 		}
 	}

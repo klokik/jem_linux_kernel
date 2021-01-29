@@ -231,8 +231,8 @@ static int qxl_release_validate_bo(struct qxl_bo *bo)
 	struct ttm_operation_ctx ctx = { true, false };
 	int ret;
 
-	if (!bo->pin_count) {
-		qxl_ttm_placement_from_domain(bo, bo->type, false);
+	if (!bo->tbo.pin_count) {
+		qxl_ttm_placement_from_domain(bo, bo->type);
 		ret = ttm_bo_validate(&bo->tbo, &bo->placement, &ctx);
 		if (ret)
 			return ret;
@@ -243,7 +243,7 @@ static int qxl_release_validate_bo(struct qxl_bo *bo)
 		return ret;
 
 	/* allocate a surface for reserved + validated buffers */
-	ret = qxl_bo_check_id(bo->tbo.base.dev->dev_private, bo);
+	ret = qxl_bo_check_id(to_qxl(bo->tbo.base.dev), bo);
 	if (ret)
 		return ret;
 	return 0;

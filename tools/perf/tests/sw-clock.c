@@ -56,7 +56,7 @@ static int __test__sw_clock_freq(enum perf_sw_ids clock_id)
 
 	evsel = evsel__new(&attr);
 	if (evsel == NULL) {
-		pr_debug("perf_evsel__new\n");
+		pr_debug("evsel__new\n");
 		goto out_delete_evlist;
 	}
 	evlist__add(evlist, evsel);
@@ -109,7 +109,7 @@ static int __test__sw_clock_freq(enum perf_sw_ids clock_id)
 		if (event->header.type != PERF_RECORD_SAMPLE)
 			goto next_event;
 
-		err = perf_evlist__parse_sample(evlist, event, &sample);
+		err = evlist__parse_sample(evlist, event, &sample);
 		if (err < 0) {
 			pr_debug("Error during parse sample\n");
 			goto out_delete_evlist;

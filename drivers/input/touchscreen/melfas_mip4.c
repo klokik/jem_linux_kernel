@@ -391,7 +391,7 @@ static void mip4_clear_input(struct mip4_ts *ts)
 	/* Screen */
 	for (i = 0; i < MIP4_MAX_FINGERS; i++) {
 		input_mt_slot(ts->input, i);
-		input_mt_report_slot_state(ts->input, MT_TOOL_FINGER, 0);
+		input_mt_report_slot_inactive(ts->input);
 	}
 
 	/* Keys */
@@ -534,7 +534,7 @@ static void mip4_report_touch(struct mip4_ts *ts, u8 *packet)
 	} else {
 		/* Release event */
 		input_mt_slot(ts->input, id);
-		input_mt_report_slot_state(ts->input, MT_TOOL_FINGER, 0);
+		input_mt_report_slot_inactive(ts->input);
 	}
 
 	input_mt_sync_frame(ts->input);
@@ -1256,7 +1256,7 @@ static int mip4_execute_fw_update(struct mip4_ts *ts, const struct firmware *fw)
 	if (error)
 		return error;
 
-	if (ts->input->users) {
+	if (input_device_enabled(ts->input)) {
 		disable_irq(ts->client->irq);
 	} else {
 		error = mip4_power_on(ts);
@@ -1276,7 +1276,7 @@ static int mip4_execute_fw_update(struct mip4_ts *ts, const struct firmware *fw)
 			"Failed to flash firmware: %d\n", error);
 
 	/* Enable IRQ */
-	if (ts->input->users)
+	if (input_device_enabled(ts->input))
 		enable_irq(ts->client->irq);
 	else
 		mip4_power_off(ts);
@@ -1539,7 +1539,7 @@ static int __maybe_unused mip4_suspend(struct device *dev)
 
 	if (device_may_wakeup(dev))
 		ts->wake_irq_enabled = enable_irq_wake(client->irq) == 0;
-	else if (input->users)
+	else if (input_device_enabled(input))
 		mip4_disable(ts);
 
 	mutex_unlock(&input->mutex);
@@ -1557,7 +1557,7 @@ static int __maybe_unused mip4_resume(struct device *dev)
 
 	if (ts->wake_irq_enabled)
 		disable_irq_wake(client->irq);
-	else if (input->users)
+	else if (input_device_enabled(input))
 		mip4_enable(ts);
 
 	mutex_unlock(&input->mutex);

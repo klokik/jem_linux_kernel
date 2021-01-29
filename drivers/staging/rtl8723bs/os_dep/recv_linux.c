@@ -9,6 +9,8 @@
 #include <drv_types.h>
 #include <rtw_debug.h>
 #include <linux/jiffies.h>
+#include <net/cfg80211.h>
+#include <asm/unaligned.h>
 
 void rtw_os_free_recvframe(union recv_frame *precvframe)
 {
@@ -31,7 +33,7 @@ void rtw_os_recv_resource_free(struct recv_priv *precvpriv)
 	sint i;
 	union recv_frame *precvframe;
 
-	precvframe = (union recv_frame*) precvpriv->precv_frame_buf;
+	precvframe = (union recv_frame *) precvpriv->precv_frame_buf;
 
 	for (i = 0; i < NR_RECVFRAME; i++) {
 		if (precvframe->u.hdr.pkt) {
@@ -60,27 +62,20 @@ _pkt *rtw_os_alloc_msdu_pkt(union recv_frame *prframe, u16 nSubframe_Length, u8 
 	pattrib = &prframe->u.hdr.attrib;
 
 	sub_skb = rtw_skb_alloc(nSubframe_Length + 12);
-	if (sub_skb) {
-		skb_reserve(sub_skb, 12);
-		skb_put_data(sub_skb, (pdata + ETH_HLEN), nSubframe_Length);
-	} else {
-		sub_skb = rtw_skb_clone(prframe->u.hdr.pkt);
-		if (sub_skb) {
-			sub_skb->data = pdata + ETH_HLEN;
-			sub_skb->len = nSubframe_Length;
-			skb_set_tail_pointer(sub_skb, nSubframe_Length);
-		} else {
-			DBG_871X("%s(): rtw_skb_clone() Fail!!!\n", __func__);
-			return NULL;
-		}
+	if (!sub_skb) {
+		DBG_871X("%s(): rtw_skb_alloc() Fail!!!\n", __func__);
+		return NULL;
 	}
 
-	eth_type = RTW_GET_BE16(&sub_skb->data[6]);
+	skb_reserve(sub_skb, 12);
+	skb_put_data(sub_skb, (pdata + ETH_HLEN), nSubframe_Length);
+
+	eth_type = get_unaligned_be16(&sub_skb->data[6]);
 
 	if (sub_skb->len >= 8 &&
-		((!memcmp(sub_skb->data, rtw_rfc1042_header, SNAP_SIZE) &&
+		((!memcmp(sub_skb->data, rfc1042_header, SNAP_SIZE) &&
 		  eth_type != ETH_P_AARP && eth_type != ETH_P_IPX) ||
-		 !memcmp(sub_skb->data, rtw_bridge_tunnel_header, SNAP_SIZE))) {
+		 !memcmp(sub_skb->data, bridge_tunnel_header, SNAP_SIZE))) {
 		/*
 		 * remove RFC1042 or Bridge-Tunnel encapsulation and replace
 		 * EtherType
@@ -102,7 +97,7 @@ _pkt *rtw_os_alloc_msdu_pkt(union recv_frame *prframe, u16 nSubframe_Length, u8 
 
 void rtw_os_recv_indicate_pkt(struct adapter *padapter, _pkt *pkt, struct rx_pkt_attrib *pattrib)
 {
-	struct mlme_priv*pmlmepriv = &padapter->mlmepriv;
+	struct mlme_priv *pmlmepriv = &padapter->mlmepriv;
 	int ret;
 
 	/* Indicate the packets to upper layer */
@@ -116,20 +111,20 @@ void rtw_os_recv_indicate_pkt(struct adapter *padapter, _pkt *pkt, struct rx_pkt
 			if (memcmp(pattrib->dst, myid(&padapter->eeprompriv), ETH_ALEN)) {
 				if (bmcast) {
 					psta = rtw_get_bcmc_stainfo(padapter);
-					pskb2 = rtw_skb_clone(pkt);
+					pskb2 = skb_clone(pkt, GFP_ATOMIC);
 				} else {
 					psta = rtw_get_stainfo(pstapriv, pattrib->dst);
 				}
 
 				if (psta) {
-					struct net_device *pnetdev = (struct net_device*)padapter->pnetdev;
+					struct net_device *pnetdev = (struct net_device *)padapter->pnetdev;
 					/* skb->ip_summed = CHECKSUM_NONE; */
 					pkt->dev = pnetdev;
 					skb_set_queue_mapping(pkt, rtw_recv_select_queue(pkt));
 
 					_rtw_xmit_entry(pkt, pnetdev);
 
-					if (bmcast && (pskb2 != NULL)) {
+					if (bmcast && pskb2) {
 						pkt = pskb2;
 						DBG_COUNTER(padapter->rx_logs.os_indicate_ap_mcast);
 					} else {
@@ -170,7 +165,7 @@ void rtw_handle_tkip_mic_err(struct adapter *padapter, u8 bgroup)
 	enum nl80211_key_type key_type = 0;
 	union iwreq_data wrqu;
 	struct iw_michaelmicfailure    ev;
-	struct mlme_priv*              pmlmepriv  = &padapter->mlmepriv;
+	struct mlme_priv *pmlmepriv = &padapter->mlmepriv;
 	struct security_priv *psecuritypriv = &padapter->securitypriv;
 	unsigned long cur_time = 0;
 
@@ -223,14 +218,14 @@ static void rtw_os_ksocket_send(struct adapter *padapter, union recv_frame *prec
 	if (psta && psta->isrc && psta->pid > 0) {
 		u16 rx_pid;
 
-		rx_pid = *(u16*)(skb->data+ETH_HLEN);
+		rx_pid = *(u16 *)(skb->data+ETH_HLEN);
 
-		DBG_871X("eth rx(pid = 0x%x): sta("MAC_FMT") pid = 0x%x\n",
+		DBG_871X("eth rx(pid = 0x%x): sta(%pM) pid = 0x%x\n",
 			rx_pid, MAC_ARG(psta->hwaddr), psta->pid);
 
 		if (rx_pid == psta->pid) {
 			int i;
-			u16 len = *(u16*)(skb->data+ETH_HLEN+2);
+			u16 len = *(u16 *)(skb->data+ETH_HLEN+2);
 			DBG_871X("eth, RC: len = 0x%x\n", len);
 
 			for (i = 0; i < len; i++)

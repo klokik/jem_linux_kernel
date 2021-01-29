@@ -191,10 +191,14 @@ int otx2_set_mac_address(struct net_device *netdev, void *p)
 	if (!is_valid_ether_addr(addr->sa_data))
 		return -EADDRNOTAVAIL;
 
-	if (!otx2_hw_set_mac_addr(pfvf, addr->sa_data))
+	if (!otx2_hw_set_mac_addr(pfvf, addr->sa_data)) {
 		memcpy(netdev->dev_addr, addr->sa_data, netdev->addr_len);
-	else
+		/* update dmac field in vlan offload rule */
+		if (pfvf->flags & OTX2_FLAG_RX_VLAN_SUPPORT)
+			otx2_install_rxvlan_offload_flow(pfvf);
+	} else {
 		return -EPERM;
+	}
 
 	return 0;
 }
@@ -355,7 +359,8 @@ int otx2_rss_init(struct otx2_nic *pfvf)
 	rss->flowkey_cfg = rss->enable ? rss->flowkey_cfg :
 			   NIX_FLOW_KEY_TYPE_IPV4 | NIX_FLOW_KEY_TYPE_IPV6 |
 			   NIX_FLOW_KEY_TYPE_TCP | NIX_FLOW_KEY_TYPE_UDP |
-			   NIX_FLOW_KEY_TYPE_SCTP;
+			   NIX_FLOW_KEY_TYPE_SCTP | NIX_FLOW_KEY_TYPE_VLAN |
+			   NIX_FLOW_KEY_TYPE_IPV4_PROTO;
 
 	ret = otx2_set_flowkey_cfg(pfvf);
 	if (ret)
@@ -363,6 +368,95 @@ int otx2_rss_init(struct otx2_nic *pfvf)
 
 	rss->enable = true;
 	return 0;
+}
+
+/* Setup UDP segmentation algorithm in HW */
+static void otx2_setup_udp_segmentation(struct nix_lso_format_cfg *lso, bool v4)
+{
+	struct nix_lso_format *field;
+
+	field = (struct nix_lso_format *)&lso->fields[0];
+	lso->field_mask = GENMASK(18, 0);
+
+	/* IP's Length field */
+	field->layer = NIX_TXLAYER_OL3;
+	/* In ipv4, length field is at offset 2 bytes, for ipv6 it's 4 */
+	field->offset = v4 ? 2 : 4;
+	field->sizem1 = 1; /* i.e 2 bytes */
+	field->alg = NIX_LSOALG_ADD_PAYLEN;
+	field++;
+
+	/* No ID field in IPv6 header */
+	if (v4) {
+		/* Increment IPID */
+		field->layer = NIX_TXLAYER_OL3;
+		field->offset = 4;
+		field->sizem1 = 1; /* i.e 2 bytes */
+		field->alg = NIX_LSOALG_ADD_SEGNUM;
+		field++;
+	}
+
+	/* Update length in UDP header */
+	field->layer = NIX_TXLAYER_OL4;
+	field->offset = 4;
+	field->sizem1 = 1;
+	field->alg = NIX_LSOALG_ADD_PAYLEN;
+}
+
+/* Setup segmentation algorithms in HW and retrieve algorithm index */
+void otx2_setup_segmentation(struct otx2_nic *pfvf)
+{
+	struct nix_lso_format_cfg_rsp *rsp;
+	struct nix_lso_format_cfg *lso;
+	struct otx2_hw *hw = &pfvf->hw;
+	int err;
+
+	mutex_lock(&pfvf->mbox.lock);
+
+	/* UDPv4 segmentation */
+	lso = otx2_mbox_alloc_msg_nix_lso_format_cfg(&pfvf->mbox);
+	if (!lso)
+		goto fail;
+
+	/* Setup UDP/IP header fields that HW should update per segment */
+	otx2_setup_udp_segmentation(lso, true);
+
+	err = otx2_sync_mbox_msg(&pfvf->mbox);
+	if (err)
+		goto fail;
+
+	rsp = (struct nix_lso_format_cfg_rsp *)
+			otx2_mbox_get_rsp(&pfvf->mbox.mbox, 0, &lso->hdr);
+	if (IS_ERR(rsp))
+		goto fail;
+
+	hw->lso_udpv4_idx = rsp->lso_format_idx;
+
+	/* UDPv6 segmentation */
+	lso = otx2_mbox_alloc_msg_nix_lso_format_cfg(&pfvf->mbox);
+	if (!lso)
+		goto fail;
+
+	/* Setup UDP/IP header fields that HW should update per segment */
+	otx2_setup_udp_segmentation(lso, false);
+
+	err = otx2_sync_mbox_msg(&pfvf->mbox);
+	if (err)
+		goto fail;
+
+	rsp = (struct nix_lso_format_cfg_rsp *)
+			otx2_mbox_get_rsp(&pfvf->mbox.mbox, 0, &lso->hdr);
+	if (IS_ERR(rsp))
+		goto fail;
+
+	hw->lso_udpv6_idx = rsp->lso_format_idx;
+	mutex_unlock(&pfvf->mbox.lock);
+	return;
+fail:
+	mutex_unlock(&pfvf->mbox.lock);
+	netdev_info(pfvf->netdev,
+		    "Failed to get LSO index for UDP GSO offload, disabling\n");
+	pfvf->netdev->hw_features &= ~NETIF_F_GSO_UDP_L4;
 }
 
 void otx2_config_irq_coalescing(struct otx2_nic *pfvf, int qidx)
@@ -379,38 +473,34 @@ void otx2_config_irq_coalescing(struct otx2_nic *pfvf, int qidx)
 		     (pfvf->hw.cq_ecount_wait - 1));
 }
 
-dma_addr_t otx2_alloc_rbuf(struct otx2_nic *pfvf, struct otx2_pool *pool,
-			   gfp_t gfp)
+dma_addr_t __otx2_alloc_rbuf(struct otx2_nic *pfvf, struct otx2_pool *pool)
 {
 	dma_addr_t iova;
+	u8 *buf;
 
-	/* Check if request can be accommodated in previous allocated page */
-	if (pool->page && ((pool->page_offset + pool->rbsize) <=
-	    (PAGE_SIZE << pool->rbpage_order))) {
-		pool->pageref++;
-		goto ret;
-	}
-
-	otx2_get_page(pool);
-
-	/* Allocate a new page */
-	pool->page = alloc_pages(gfp | __GFP_COMP | __GFP_NOWARN,
-				 pool->rbpage_order);
-	if (unlikely(!pool->page))
+	buf = napi_alloc_frag(pool->rbsize + OTX2_ALIGN);
+	if (unlikely(!buf))
 		return -ENOMEM;
 
-	pool->page_offset = 0;
-ret:
-	iova = (u64)otx2_dma_map_page(pfvf, pool->page, pool->page_offset,
-				      pool->rbsize, DMA_FROM_DEVICE);
-	if (!iova) {
-		if (!pool->page_offset)
-			__free_pages(pool->page, pool->rbpage_order);
-		pool->page = NULL;
+	buf = PTR_ALIGN(buf, OTX2_ALIGN);
+	iova = dma_map_single_attrs(pfvf->dev, buf, pool->rbsize,
+				    DMA_FROM_DEVICE, DMA_ATTR_SKIP_CPU_SYNC);
+	if (unlikely(dma_mapping_error(pfvf->dev, iova))) {
+		page_frag_free(buf);
 		return -ENOMEM;
 	}
-	pool->page_offset += pool->rbsize;
+
 	return iova;
+}
+
+static dma_addr_t otx2_alloc_rbuf(struct otx2_nic *pfvf, struct otx2_pool *pool)
+{
+	dma_addr_t addr;
+
+	local_bh_disable();
+	addr = __otx2_alloc_rbuf(pfvf, pool);
+	local_bh_enable();
+	return addr;
 }
 
 void otx2_tx_timeout(struct net_device *netdev, unsigned int txq)
@@ -447,8 +537,10 @@ static int otx2_get_link(struct otx2_nic *pfvf)
 		link = 4 * ((map >> 8) & 0xF) + ((map >> 4) & 0xF);
 	}
 	/* LBK channel */
-	if (pfvf->hw.tx_chan_base < SDP_CHAN_BASE)
-		link = 12;
+	if (pfvf->hw.tx_chan_base < SDP_CHAN_BASE) {
+		map = pfvf->hw.tx_chan_base & 0x7FF;
+		link = pfvf->hw.cgx_links | ((map >> 8) & 0xF);
+	}
 
 	return link;
 }
@@ -676,6 +768,13 @@ static int otx2_sq_init(struct otx2_nic *pfvf, u16 qidx, u16 sqb_aura)
 	if (!sq->sg)
 		return -ENOMEM;
 
+	if (pfvf->ptp) {
+		err = qmem_alloc(pfvf->dev, &sq->timestamps, qset->sqe_cnt,
+				 sizeof(*sq->timestamps));
+		if (err)
+			return err;
+	}
+
 	sq->head = 0;
 	sq->sqe_per_sqb = (pfvf->hw.sqb_size / sq->sqe_size) - 1;
 	sq->num_sqbs = (qset->sqe_cnt + sq->sqe_per_sqb) / sq->sqe_per_sqb;
@@ -805,7 +904,7 @@ static void otx2_pool_refill_task(struct work_struct *work)
 	free_ptrs = cq->pool_ptrs;
 
 	while (cq->pool_ptrs) {
-		bufptr = otx2_alloc_rbuf(pfvf, rbpool, GFP_KERNEL);
+		bufptr = otx2_alloc_rbuf(pfvf, rbpool);
 		if (bufptr <= 0) {
 			/* Schedule a WQ if we fails to free atleast half of the
 			 * pointers else enable napi for this RQ.
@@ -1064,7 +1163,6 @@ static int otx2_pool_init(struct otx2_nic *pfvf, u16 pool_id,
 		return err;
 
 	pool->rbsize = buf_size;
-	pool->rbpage_order = get_order(buf_size);
 
 	/* Initialize this pool's context via AF */
 	aq = otx2_mbox_alloc_msg_npa_aq_enq(&pfvf->mbox);
@@ -1147,18 +1245,17 @@ int otx2_sq_aura_pool_init(struct otx2_nic *pfvf)
 
 		sq = &qset->sq[qidx];
 		sq->sqb_count = 0;
-		sq->sqb_ptrs = kcalloc(num_sqbs, sizeof(u64 *), GFP_KERNEL);
+		sq->sqb_ptrs = kcalloc(num_sqbs, sizeof(*sq->sqb_ptrs), GFP_KERNEL);
 		if (!sq->sqb_ptrs)
 			return -ENOMEM;
 
 		for (ptr = 0; ptr < num_sqbs; ptr++) {
-			bufptr = otx2_alloc_rbuf(pfvf, pool, GFP_KERNEL);
+			bufptr = otx2_alloc_rbuf(pfvf, pool);
 			if (bufptr <= 0)
 				return bufptr;
 			otx2_aura_freeptr(pfvf, pool_id, bufptr);
 			sq->sqb_ptrs[sq->sqb_count++] = (u64)bufptr;
 		}
-		otx2_get_page(pool);
 	}
 
 	return 0;
@@ -1204,13 +1301,12 @@ int otx2_rq_aura_pool_init(struct otx2_nic *pfvf)
 	for (pool_id = 0; pool_id < hw->rqpool_cnt; pool_id++) {
 		pool = &pfvf->qset.pool[pool_id];
 		for (ptr = 0; ptr < num_ptrs; ptr++) {
-			bufptr = otx2_alloc_rbuf(pfvf, pool, GFP_KERNEL);
+			bufptr = otx2_alloc_rbuf(pfvf, pool);
 			if (bufptr <= 0)
 				return bufptr;
 			otx2_aura_freeptr(pfvf, pool_id,
 					  bufptr + OTX2_HEAD_ROOM);
 		}
-		otx2_get_page(pool);
 	}
 
 	return 0;
@@ -1234,8 +1330,8 @@ int otx2_config_npa(struct otx2_nic *pfvf)
 	if (!hw->pool_cnt)
 		return -EINVAL;
 
-	qset->pool = devm_kzalloc(pfvf->dev, sizeof(struct otx2_pool) *
-				  hw->pool_cnt, GFP_KERNEL);
+	qset->pool = devm_kcalloc(pfvf->dev, hw->pool_cnt,
+				  sizeof(struct otx2_pool), GFP_KERNEL);
 	if (!qset->pool)
 		return -ENOMEM;
 
@@ -1415,6 +1511,8 @@ void mbox_handler_nix_lf_alloc(struct otx2_nic *pfvf,
 	pfvf->hw.tx_chan_base = rsp->tx_chan_base;
 	pfvf->hw.lso_tsov4_idx = rsp->lso_tsov4_idx;
 	pfvf->hw.lso_tsov6_idx = rsp->lso_tsov6_idx;
+	pfvf->hw.cgx_links = rsp->cgx_links;
+	pfvf->hw.lbk_links = rsp->lbk_links;
 }
 EXPORT_SYMBOL(mbox_handler_nix_lf_alloc);
 

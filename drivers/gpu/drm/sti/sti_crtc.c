@@ -23,7 +23,7 @@
 #include "sti_vtg.h"
 
 static void sti_crtc_atomic_enable(struct drm_crtc *crtc,
-				   struct drm_crtc_state *old_state)
+				   struct drm_atomic_state *state)
 {
 	struct sti_mixer *mixer = to_sti_mixer(crtc);
 
@@ -35,7 +35,7 @@ static void sti_crtc_atomic_enable(struct drm_crtc *crtc,
 }
 
 static void sti_crtc_atomic_disable(struct drm_crtc *crtc,
-				    struct drm_crtc_state *old_state)
+				    struct drm_atomic_state *state)
 {
 	struct sti_mixer *mixer = to_sti_mixer(crtc);
 
@@ -133,7 +133,7 @@ sti_crtc_mode_set_nofb(struct drm_crtc *crtc)
 }
 
 static void sti_crtc_atomic_flush(struct drm_crtc *crtc,
-				  struct drm_crtc_state *old_crtc_state)
+				  struct drm_atomic_state *state)
 {
 	struct drm_device *drm_dev = crtc->dev;
 	struct sti_mixer *mixer = to_sti_mixer(crtc);
@@ -319,7 +319,7 @@ static int sti_crtc_late_register(struct drm_crtc *crtc)
 	struct sti_compositor *compo = dev_get_drvdata(mixer->dev);
 
 	if (drm_crtc_index(crtc) == 0)
-		return sti_compositor_debugfs_init(compo, crtc->dev->primary);
+		sti_compositor_debugfs_init(compo, crtc->dev->primary);
 
 	return 0;
 }

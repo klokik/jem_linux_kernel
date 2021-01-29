@@ -2,7 +2,7 @@
 
 #include <linux/err.h>
 #include <asm/asm-prototypes.h>
-#include <asm/book3s/64/kup-radix.h>
+#include <asm/kup.h>
 #include <asm/cputime.h>
 #include <asm/hw_irq.h>
 #include <asm/kprobes.h>
@@ -35,6 +35,32 @@ notrace long system_call_exception(long r3, long r4, long r5,
 	BUG_ON(!FULL_REGS(regs));
 	BUG_ON(regs->softe != IRQS_ENABLED);
 
+#ifdef CONFIG_PPC_PKEY
+	if (mmu_has_feature(MMU_FTR_PKEY)) {
+		unsigned long amr, iamr;
+		bool flush_needed = false;
+		/*
+		 * When entering from userspace we mostly have the AMR/IAMR
+		 * different from kernel default values. Hence don't compare.
+		 */
+		amr = mfspr(SPRN_AMR);
+		iamr = mfspr(SPRN_IAMR);
+		regs->amr  = amr;
+		regs->iamr = iamr;
+		if (mmu_has_feature(MMU_FTR_BOOK3S_KUAP)) {
+			mtspr(SPRN_AMR, AMR_KUAP_BLOCKED);
+			flush_needed = true;
+		}
+		if (mmu_has_feature(MMU_FTR_BOOK3S_KUEP)) {
+			mtspr(SPRN_IAMR, AMR_KUEP_BLOCKED);
+			flush_needed = true;
+		}
+		if (flush_needed)
+			isync();
+	} else
+#endif
+		kuap_check_amr();
+
 	account_cpu_user_entry();
 
 #ifdef CONFIG_PPC_SPLPAR
@@ -47,8 +73,6 @@ notrace long system_call_exception(long r3, long r4, long r5,
 	}
 #endif
 
-	kuap_check_amr();
-
 	/*
 	 * This is not required for the syscall exit path, but makes the
 	 * stack frame look nicer. If this was initialised in the first stack
@@ -60,6 +84,11 @@ notrace long system_call_exception(long r3, long r4, long r5,
 	local_irq_enable();
 
 	if (unlikely(current_thread_info()->flags & _TIF_SYSCALL_DOTRACE)) {
+		if (unlikely(regs->trap == 0x7ff0)) {
+			/* Unsupported scv vector */
+			_exception(SIGILL, regs, ILL_ILLOPC, regs->nip);
+			return regs->gpr[3];
+		}
 		/*
 		 * We use the return value of do_syscall_trace_enter() as the
 		 * syscall number. If the syscall was rejected for any reason
@@ -78,6 +107,11 @@ notrace long system_call_exception(long r3, long r4, long r5,
 		r8 = regs->gpr[8];
 
 	} else if (unlikely(r0 >= NR_syscalls)) {
+		if (unlikely(regs->trap == 0x7ff0)) {
+			/* Unsupported scv vector */
+			_exception(SIGILL, regs, ILL_ILLOPC, regs->nip);
+			return regs->gpr[3];
+		}
 		return -ENOSYS;
 	}
 
@@ -102,6 +136,35 @@ notrace long system_call_exception(long r3, long r4, long r5,
 }
 
 /*
+ * local irqs must be disabled. Returns false if the caller must re-enable
+ * them, check for new work, and try again.
+ */
+static notrace inline bool prep_irq_for_enabled_exit(bool clear_ri)
+{
+	/* This must be done with RI=1 because tracing may touch vmaps */
+	trace_hardirqs_on();
+
+	/* This pattern matches prep_irq_for_idle */
+	if (clear_ri)
+		__hard_EE_RI_disable();
+	else
+		__hard_irq_disable();
+	if (unlikely(lazy_irq_pending_nocheck())) {
+		/* Took an interrupt, may have more exit work to do. */
+		if (clear_ri)
+			__hard_RI_enable();
+		trace_hardirqs_off();
+		local_paca->irq_happened |= PACA_IRQ_HARD_DIS;
+
+		return false;
+	}
+	local_paca->irq_happened = 0;
+	irq_soft_mask_set(IRQS_ENABLED);
+
+	return true;
+}
+
+/*
  * This should be called after a syscall returns, with r3 the return value
  * from the syscall. If this function returns non-zero, the system call
  * exit assembly should additionally load all GPR registers and CTR and XER
@@ -111,11 +174,14 @@ notrace long system_call_exception(long r3, long r4, long r5,
  * because RI=0 and soft mask state is "unreconciled", so it is marked notrace.
  */
 notrace unsigned long syscall_exit_prepare(unsigned long r3,
-					   struct pt_regs *regs)
+					   struct pt_regs *regs,
+					   long scv)
 {
 	unsigned long *ti_flagsp = &current_thread_info()->flags;
 	unsigned long ti_flags;
 	unsigned long ret = 0;
+
+	kuap_check_amr();
 
 	regs->result = r3;
 
@@ -124,7 +190,7 @@ notrace unsigned long syscall_exit_prepare(unsigned long r3,
 
 	ti_flags = *ti_flagsp;
 
-	if (unlikely(r3 >= (unsigned long)-MAX_ERRNO)) {
+	if (unlikely(r3 >= (unsigned long)-MAX_ERRNO) && !scv) {
 		if (likely(!(ti_flags & (_TIF_NOERROR | _TIF_RESTOREALL)))) {
 			r3 = -r3;
 			regs->ccr |= 0x10000000; /* Set SO bit in CR */
@@ -179,35 +245,36 @@ again:
 			else if (cpu_has_feature(CPU_FTR_ALTIVEC))
 				mathflags |= MSR_VEC;
 
+			/*
+			 * If userspace MSR has all available FP bits set,
+			 * then they are live and no need to restore. If not,
+			 * it means the regs were given up and restore_math
+			 * may decide to restore them (to avoid taking an FP
+			 * fault).
+			 */
 			if ((regs->msr & mathflags) != mathflags)
 				restore_math(regs);
 		}
 	}
 
-	/* This must be done with RI=1 because tracing may touch vmaps */
-	trace_hardirqs_on();
-
-	/* This pattern matches prep_irq_for_idle */
-	__hard_EE_RI_disable();
-	if (unlikely(lazy_irq_pending())) {
-		__hard_RI_enable();
-		trace_hardirqs_off();
-		local_paca->irq_happened |= PACA_IRQ_HARD_DIS;
+	/* scv need not set RI=0 because SRRs are not used */
+	if (unlikely(!prep_irq_for_enabled_exit(!scv))) {
 		local_irq_enable();
-		/* Took an interrupt, may have more exit work to do. */
 		goto again;
 	}
-	local_paca->irq_happened = 0;
-	irq_soft_mask_set(IRQS_ENABLED);
 
 #ifdef CONFIG_PPC_TRANSACTIONAL_MEM
 	local_paca->tm_scratch = regs->msr;
 #endif
 
-	kuap_check_amr();
-
 	account_cpu_user_exit();
 
+#ifdef CONFIG_PPC_BOOK3S /* BOOK3E not yet using this */
+	/*
+	 * We do this at the end so that we do context switch with KERNEL AMR
+	 */
+	kuap_user_restore(regs);
+#endif
 	return ret;
 }
 
@@ -227,6 +294,12 @@ notrace unsigned long interrupt_exit_user_prepare(struct pt_regs *regs, unsigned
 	BUG_ON(!(regs->msr & MSR_PR));
 	BUG_ON(!FULL_REGS(regs));
 	BUG_ON(regs->softe != IRQS_ENABLED);
+
+	/*
+	 * We don't need to restore AMR on the way back to userspace for KUAP.
+	 * AMR can only have been unlocked if we interrupted the kernel.
+	 */
+	kuap_check_amr();
 
 	local_irq_save(flags);
 
@@ -257,24 +330,17 @@ again:
 			else if (cpu_has_feature(CPU_FTR_ALTIVEC))
 				mathflags |= MSR_VEC;
 
+			/* See above restore_math comment */
 			if ((regs->msr & mathflags) != mathflags)
 				restore_math(regs);
 		}
 	}
 
-	trace_hardirqs_on();
-	__hard_EE_RI_disable();
-	if (unlikely(lazy_irq_pending())) {
-		__hard_RI_enable();
-		trace_hardirqs_off();
-		local_paca->irq_happened |= PACA_IRQ_HARD_DIS;
+	if (unlikely(!prep_irq_for_enabled_exit(true))) {
 		local_irq_enable();
 		local_irq_disable();
-		/* Took an interrupt, may have more exit work to do. */
 		goto again;
 	}
-	local_paca->irq_happened = 0;
-	irq_soft_mask_set(IRQS_ENABLED);
 
 #ifdef CONFIG_PPC_BOOK3E
 	if (unlikely(ts->debug.dbcr0 & DBCR0_IDM)) {
@@ -292,10 +358,12 @@ again:
 	local_paca->tm_scratch = regs->msr;
 #endif
 
-	kuap_check_amr();
-
 	account_cpu_user_exit();
 
+	/*
+	 * We do this at the end so that we do context switch with KERNEL AMR
+	 */
+	kuap_user_restore(regs);
 	return ret;
 }
 
@@ -307,11 +375,14 @@ notrace unsigned long interrupt_exit_kernel_prepare(struct pt_regs *regs, unsign
 	unsigned long *ti_flagsp = &current_thread_info()->flags;
 	unsigned long flags;
 	unsigned long ret = 0;
+	unsigned long amr;
 
 	if (IS_ENABLED(CONFIG_PPC_BOOK3S) && unlikely(!(regs->msr & MSR_RI)))
 		unrecoverable_exception(regs);
 	BUG_ON(regs->msr & MSR_PR);
 	BUG_ON(!FULL_REGS(regs));
+
+	amr = kuap_get_and_check_amr();
 
 	if (unlikely(*ti_flagsp & _TIF_EMULATE_STACK_STORE)) {
 		clear_bits(_TIF_EMULATE_STACK_STORE, ti_flagsp);
@@ -332,13 +403,7 @@ again:
 			}
 		}
 
-		trace_hardirqs_on();
-		__hard_EE_RI_disable();
-		if (unlikely(lazy_irq_pending())) {
-			__hard_RI_enable();
-			irq_soft_mask_set(IRQS_ALL_DISABLED);
-			trace_hardirqs_off();
-			local_paca->irq_happened |= PACA_IRQ_HARD_DIS;
+		if (unlikely(!prep_irq_for_enabled_exit(true))) {
 			/*
 			 * Can't local_irq_restore to replay if we were in
 			 * interrupt context. Must replay directly.
@@ -352,8 +417,6 @@ again:
 			/* Took an interrupt, may have more exit work to do. */
 			goto again;
 		}
-		local_paca->irq_happened = 0;
-		irq_soft_mask_set(IRQS_ENABLED);
 	} else {
 		/* Returning to a kernel context with local irqs disabled. */
 		__hard_EE_RI_disable();
@@ -367,10 +430,11 @@ again:
 #endif
 
 	/*
-	 * We don't need to restore AMR on the way back to userspace for KUAP.
-	 * The value of AMR only matters while we're in the kernel.
+	 * Don't want to mfspr(SPRN_AMR) here, because this comes after mtmsr,
+	 * which would cause Read-After-Write stalls. Hence, we take the AMR
+	 * value from the check above.
 	 */
-	kuap_restore_amr(regs);
+	kuap_kernel_restore(regs, amr);
 
 	return ret;
 }

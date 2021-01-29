@@ -73,6 +73,17 @@ config INPUT_AD714X_SPI
 	  To compile this driver as a module, choose M here: the
 	  module will be called ad714x-spi.
 
+config INPUT_ARIEL_PWRBUTTON
+	tristate "Dell Wyse 3020 Power Button Driver"
+	depends on SPI
+	depends on MACH_MMP3_DT || COMPILE_TEST
+	help
+	  Say Y to enable support for reporting power button status on
+	  on Dell Wyse 3020 ("Ariel") thin client.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called ariel-pwrbutton.
+
 config INPUT_ARIZONA_HAPTICS
 	tristate "Arizona haptics support"
 	depends on MFD_ARIZONA && SND_SOC
@@ -116,16 +127,6 @@ config INPUT_E3X0_BUTTON
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called e3x0_button.
-
-config INPUT_MSM_VIBRATOR
-	tristate "Qualcomm MSM vibrator driver"
-	select INPUT_FF_MEMLESS
-	help
-	  Support for the vibrator that is found on various Qualcomm MSM
-	  SOCs.
-
-	  To compile this driver as a module, choose M here: the module
-	  will be called msm_vibrator.
 
 config INPUT_PCSPKR
 	tristate "PC Speaker support"
@@ -264,17 +265,6 @@ config INPUT_APANEL
 
 	 To compile this driver as a module, choose M here: the module will
 	 be called apanel.
-
-config INPUT_GP2A
-	tristate "Sharp GP2AP002A00F I2C Proximity/Opto sensor driver"
-	depends on I2C
-	depends on GPIOLIB || COMPILE_TEST
-	help
-	  Say Y here if you have a Sharp GP2AP002A00F proximity/als combo-chip
-	  hooked to an I2C bus.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called gp2ap002a00f.
 
 config INPUT_GPIO_BEEPER
 	tristate "Generic GPIO Beeper support"
@@ -630,6 +620,18 @@ config INPUT_RB532_BUTTON
 	  To compile this driver as a module, choose M here: the
 	  module will be called rb532_button.
 
+config INPUT_DA7280_HAPTICS
+	tristate "Dialog Semiconductor DA7280 haptics support"
+	depends on INPUT && I2C
+	select REGMAP_I2C
+	help
+	  Say Y to enable support for the Dialog DA7280 haptics driver.
+	  The haptics can be controlled by PWM or GPIO
+	  with I2C communication.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called da7280.
+
 config INPUT_DA9052_ONKEY
 	tristate "Dialog DA9052/DA9053 Onkey"
 	depends on PMIC_DA9052
@@ -738,6 +740,17 @@ config INPUT_IMS_PCU
 
 	  To compile this driver as a module, choose M here: the module will be
 	  called ims_pcu.
+
+config INPUT_IQS269A
+	tristate "Azoteq IQS269A capacitive touch controller"
+	depends on I2C
+	select REGMAP_I2C
+	help
+	  Say Y to enable support for the Azoteq IQS269A capacitive
+	  touch controller.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called iqs269a.
 
 config INPUT_CMA3000
 	tristate "VTI CMA3000 Tri-axis accelerometer"

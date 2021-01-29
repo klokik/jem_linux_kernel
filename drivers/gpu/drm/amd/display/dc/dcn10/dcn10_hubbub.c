@@ -93,7 +93,6 @@ void hubbub1_wm_read_state(struct hubbub *hubbub,
 void hubbub1_allow_self_refresh_control(struct hubbub *hubbub, bool allow)
 {
 	struct dcn10_hubbub *hubbub1 = TO_DCN10_HUBBUB(hubbub);
-
 	/*
 	 * DCHUBBUB_ARB_ALLOW_SELF_REFRESH_FORCE_ENABLE = 1 means do not allow stutter
 	 * DCHUBBUB_ARB_ALLOW_SELF_REFRESH_FORCE_ENABLE = 0 means allow stutter
@@ -125,11 +124,11 @@ bool hubbub1_verify_allow_pstate_change_high(
 	 * still not asserted, we are probably stuck and going to hang
 	 *
 	 * TODO: Figure out why it takes ~100us on linux
-	 * pstate takes around ~100us on linux. Unknown currently as to
-	 * why it takes that long on linux
+	 * pstate takes around ~100us (up to 200us) on linux. Unknown currently
+	 * as to why it takes that long on linux
 	 */
 	const unsigned int pstate_wait_timeout_us = 200;
-	const unsigned int pstate_wait_expected_timeout_us = 40;
+	const unsigned int pstate_wait_expected_timeout_us = 180;
 	static unsigned int max_sampled_pstate_wait_us; /* data collection */
 	static bool forced_pstate_allow; /* help with revert wa */
 

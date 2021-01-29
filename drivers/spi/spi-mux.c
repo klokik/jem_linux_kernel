@@ -51,6 +51,10 @@ static int spi_mux_select(struct spi_device *spi)
 	struct spi_mux_priv *priv = spi_controller_get_devdata(spi->controller);
 	int ret;
 
+	ret = mux_control_select(priv->mux, spi->chip_select);
+	if (ret)
+		return ret;
+
 	if (priv->current_cs == spi->chip_select)
 		return 0;
 
@@ -61,10 +65,6 @@ static int spi_mux_select(struct spi_device *spi)
 	priv->spi->max_speed_hz = spi->max_speed_hz;
 	priv->spi->mode = spi->mode;
 	priv->spi->bits_per_word = spi->bits_per_word;
-
-	ret = mux_control_select(priv->mux, spi->chip_select);
-	if (ret)
-		return ret;
 
 	priv->current_cs = spi->chip_select;
 
@@ -139,9 +139,8 @@ static int spi_mux_probe(struct spi_device *spi)
 
 	priv->mux = devm_mux_control_get(&spi->dev, NULL);
 	if (IS_ERR(priv->mux)) {
-		ret = PTR_ERR(priv->mux);
-		if (ret != -EPROBE_DEFER)
-			dev_err(&spi->dev, "failed to get control-mux\n");
+		ret = dev_err_probe(&spi->dev, PTR_ERR(priv->mux),
+				    "failed to get control-mux\n");
 		goto err_put_ctlr;
 	}
 

@@ -120,13 +120,13 @@ struct ipu3_uapi_awb_config {
 #define IPU3_UAPI_AE_WEIGHTS				96
 
 /**
- + * struct ipu3_uapi_ae_raw_buffer - AE global weighted histogram
- + *
- + * @vals: Sum of IPU3_UAPI_AE_COLORS in cell
- + *
- + * Each histogram contains IPU3_UAPI_AE_BINS bins. Each bin has 24 bit unsigned
- + * for counting the number of the pixel.
- + */
+ * struct ipu3_uapi_ae_raw_buffer - AE global weighted histogram
+ *
+ * @vals: Sum of IPU3_UAPI_AE_COLORS in cell
+ *
+ * Each histogram contains IPU3_UAPI_AE_BINS bins. Each bin has 24 bit unsigned
+ * for counting the number of the pixel.
+ */
 struct ipu3_uapi_ae_raw_buffer {
 	__u32 vals[IPU3_UAPI_AE_BINS * IPU3_UAPI_AE_COLORS];
 } __packed;
@@ -418,7 +418,7 @@ struct ipu3_uapi_af_config_s {
 	 IPU3_UAPI_AWB_FR_SPARE_FOR_BUBBLES) * IPU3_UAPI_MAX_STRIPES)
 
 /**
- * struct ipu3_uapi_awb_fr_meta_data - AWB filter response meta data
+ * struct ipu3_uapi_awb_fr_raw_buffer - AWB filter response meta data
  *
  * @meta_data: Statistics output on the grid after convolving with 1D filter.
  */
@@ -450,7 +450,7 @@ struct ipu3_uapi_awb_fr_config_s {
 	__u32 bayer_sign;
 	__u8 bayer_nf;
 	__u8 reserved2[7];
-} __attribute__((aligned(32))) __packed;
+} __packed;
 
 /**
  * struct ipu3_uapi_4a_config - 4A config
@@ -466,7 +466,8 @@ struct ipu3_uapi_4a_config {
 	struct ipu3_uapi_ae_grid_config ae_grd_config;
 	__u8 padding[20];
 	struct ipu3_uapi_af_config_s af_config;
-	struct ipu3_uapi_awb_fr_config_s awb_fr_config;
+	struct ipu3_uapi_awb_fr_config_s awb_fr_config
+		__attribute__((aligned(32)));
 } __packed;
 
 /**
@@ -1505,7 +1506,7 @@ struct ipu3_uapi_sharp_cfg {
 } __packed;
 
 /**
- * struct struct ipu3_uapi_far_w - Sharpening config for far sub-group
+ * struct ipu3_uapi_far_w - Sharpening config for far sub-group
  *
  * @dir_shrp:	Weight of wide direct sharpening, u1.6, range [0, 64], default 64.
  * @reserved0:	reserved
@@ -1525,7 +1526,7 @@ struct ipu3_uapi_far_w {
 } __packed;
 
 /**
- * struct struct ipu3_uapi_unsharp_cfg - Unsharp config
+ * struct ipu3_uapi_unsharp_cfg - Unsharp config
  *
  * @unsharp_weight: Unsharp mask blending weight.
  *		    u1.6, range [0, 64], default 16.
@@ -1771,7 +1772,7 @@ struct ipu3_uapi_vss_lut_y {
 } __packed;
 
 /**
- * struct ipu3_uapi_yuvp1_iefd_vssnlm_cf - IEFd Vssnlm Lookup table
+ * struct ipu3_uapi_yuvp1_iefd_vssnlm_cfg - IEFd Vssnlm Lookup table
  *
  * @vss_lut_x: vss lookup table. See &ipu3_uapi_vss_lut_x description
  * @vss_lut_y: vss lookup table. See &ipu3_uapi_vss_lut_y description
@@ -2477,7 +2478,7 @@ struct ipu3_uapi_acc_param {
 	struct ipu3_uapi_yuvp1_yds_config yds2 __attribute__((aligned(32)));
 	struct ipu3_uapi_yuvp2_tcc_static_config tcc __attribute__((aligned(32)));
 	struct ipu3_uapi_anr_config anr;
-	struct ipu3_uapi_awb_fr_config_s awb_fr __attribute__((aligned(32)));
+	struct ipu3_uapi_awb_fr_config_s awb_fr;
 	struct ipu3_uapi_ae_config ae;
 	struct ipu3_uapi_af_config_s af;
 	struct ipu3_uapi_awb_config awb;

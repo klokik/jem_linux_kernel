@@ -24,4 +24,6 @@ Linux Kernel中的文件系统
    :maxdepth: 2
 
    virtiofs
+   debugfs
+   tmpfs
 

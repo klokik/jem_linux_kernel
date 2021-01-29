@@ -62,6 +62,7 @@
 
 /* Misc */
 #define ASUS_WMI_DEVID_CAMERA		0x00060013
+#define ASUS_WMI_DEVID_LID_FLIP		0x00060062
 
 /* Storage */
 #define ASUS_WMI_DEVID_CARDREADER	0x00080013
@@ -84,6 +85,9 @@
 
 /* Maximum charging percentage */
 #define ASUS_WMI_DEVID_RSOC		0x00120057
+
+/* Keyboard dock */
+#define ASUS_WMI_DEVID_KBD_DOCK		0x00120063
 
 /* DSTS masks */
 #define ASUS_WMI_DSTS_STATUS_BIT	0x00000001

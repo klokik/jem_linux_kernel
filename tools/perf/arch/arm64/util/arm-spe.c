@@ -118,11 +118,11 @@ static int arm_spe_recording_options(struct auxtrace_record *itr,
 	 * To obtain the auxtrace buffer file descriptor, the auxtrace event
 	 * must come first.
 	 */
-	perf_evlist__to_front(evlist, arm_spe_evsel);
+	evlist__to_front(evlist, arm_spe_evsel);
 
-	perf_evsel__set_sample_bit(arm_spe_evsel, CPU);
-	perf_evsel__set_sample_bit(arm_spe_evsel, TIME);
-	perf_evsel__set_sample_bit(arm_spe_evsel, TID);
+	evsel__set_sample_bit(arm_spe_evsel, CPU);
+	evsel__set_sample_bit(arm_spe_evsel, TIME);
+	evsel__set_sample_bit(arm_spe_evsel, TID);
 
 	/* Add dummy event to keep tracking */
 	err = parse_events(evlist, "dummy:u", NULL);
@@ -130,13 +130,13 @@ static int arm_spe_recording_options(struct auxtrace_record *itr,
 		return err;
 
 	tracking_evsel = evlist__last(evlist);
-	perf_evlist__set_tracking_event(evlist, tracking_evsel);
+	evlist__set_tracking_event(evlist, tracking_evsel);
 
 	tracking_evsel->core.attr.freq = 0;
 	tracking_evsel->core.attr.sample_period = 1;
-	perf_evsel__set_sample_bit(tracking_evsel, TIME);
-	perf_evsel__set_sample_bit(tracking_evsel, CPU);
-	perf_evsel__reset_sample_bit(tracking_evsel, BRANCH_STACK);
+	evsel__set_sample_bit(tracking_evsel, TIME);
+	evsel__set_sample_bit(tracking_evsel, CPU);
+	evsel__reset_sample_bit(tracking_evsel, BRANCH_STACK);
 
 	return 0;
 }

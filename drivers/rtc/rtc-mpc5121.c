@@ -316,7 +316,7 @@ static int mpc5121_rtc_probe(struct platform_device *op)
 	rtc->regs = devm_platform_ioremap_resource(op, 0);
 	if (IS_ERR(rtc->regs)) {
 		dev_err(&op->dev, "%s: couldn't map io space\n", __func__);
-		return -ENOSYS;
+		return PTR_ERR(rtc->regs);
 	}
 
 	device_init_wakeup(&op->dev, 1);
@@ -371,7 +371,7 @@ static int mpc5121_rtc_probe(struct platform_device *op)
 		rtc->rtc->range_max = U32_MAX;
 	}
 
-	err = rtc_register_device(rtc->rtc);
+	err = devm_rtc_register_device(rtc->rtc);
 	if (err)
 		goto out_dispose2;
 

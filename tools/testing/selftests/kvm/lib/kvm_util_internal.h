@@ -13,7 +13,6 @@
 #define KVM_DEV_PATH		"/dev/kvm"
 
 struct userspace_mem_region {
-	struct userspace_mem_region *next, *prev;
 	struct kvm_userspace_memory_region region;
 	struct sparsebit *unused_phy_pages;
 	int fd;
@@ -21,13 +20,17 @@ struct userspace_mem_region {
 	void *host_mem;
 	void *mmap_start;
 	size_t mmap_size;
+	struct list_head list;
 };
 
 struct vcpu {
-	struct vcpu *next, *prev;
+	struct list_head list;
 	uint32_t id;
 	int fd;
 	struct kvm_run *state;
+	struct kvm_dirty_gfn *dirty_gfns;
+	uint32_t fetch_index;
+	uint32_t dirty_gfns_count;
 };
 
 struct kvm_vm {
@@ -41,8 +44,8 @@ struct kvm_vm {
 	unsigned int pa_bits;
 	unsigned int va_bits;
 	uint64_t max_gfn;
-	struct vcpu *vcpu_head;
-	struct userspace_mem_region *userspace_mem_region_head;
+	struct list_head vcpus;
+	struct list_head userspace_mem_regions;
 	struct sparsebit *vpages_valid;
 	struct sparsebit *vpages_mapped;
 	bool has_irqchip;
@@ -50,6 +53,9 @@ struct kvm_vm {
 	vm_paddr_t pgd;
 	vm_vaddr_t gdt;
 	vm_vaddr_t tss;
+	vm_vaddr_t idt;
+	vm_vaddr_t handlers;
+	uint32_t dirty_ring_size;
 };
 
 struct vcpu *vcpu_find(struct kvm_vm *vm, uint32_t vcpuid);

@@ -275,6 +275,8 @@ v3d_lock_bo_reservations(struct v3d_job *job,
  * @dev: DRM device
  * @file_priv: DRM file for this fd
  * @job: V3D job being set up
+ * @bo_handles: GEM handles
+ * @bo_count: Number of GEM handles passed in
  *
  * The command validator needs to reference BOs by their index within
  * the submitted job's BO list.  This does the validation of the job's
@@ -358,7 +360,7 @@ v3d_job_free(struct kref *ref)
 
 	for (i = 0; i < job->bo_count; i++) {
 		if (job->bo[i])
-			drm_gem_object_put_unlocked(job->bo[i]);
+			drm_gem_object_put(job->bo[i]);
 	}
 	kvfree(job->bo);
 
@@ -370,8 +372,8 @@ v3d_job_free(struct kref *ref)
 	dma_fence_put(job->irq_fence);
 	dma_fence_put(job->done_fence);
 
-	pm_runtime_mark_last_busy(job->v3d->dev);
-	pm_runtime_put_autosuspend(job->v3d->dev);
+	pm_runtime_mark_last_busy(job->v3d->drm.dev);
+	pm_runtime_put_autosuspend(job->v3d->drm.dev);
 
 	kfree(job);
 }
@@ -384,7 +386,7 @@ v3d_render_job_free(struct kref *ref)
 	struct v3d_bo *bo, *save;
 
 	list_for_each_entry_safe(bo, save, &job->unref_list, unref_head) {
-		drm_gem_object_put_unlocked(&bo->base.base);
+		drm_gem_object_put(&bo->base.base);
 	}
 
 	v3d_job_free(ref);
@@ -439,7 +441,7 @@ v3d_job_init(struct v3d_dev *v3d, struct drm_file *file_priv,
 	job->v3d = v3d;
 	job->free = free;
 
-	ret = pm_runtime_get_sync(v3d->dev);
+	ret = pm_runtime_get_sync(v3d->drm.dev);
 	if (ret < 0)
 		return ret;
 
@@ -458,7 +460,7 @@ v3d_job_init(struct v3d_dev *v3d, struct drm_file *file_priv,
 	return 0;
 fail:
 	xa_destroy(&job->deps);
-	pm_runtime_put_autosuspend(v3d->dev);
+	pm_runtime_put_autosuspend(v3d->drm.dev);
 	return ret;
 }
 
@@ -568,7 +570,6 @@ v3d_submit_cl_ioctl(struct drm_device *dev, void *data,
 		ret = v3d_job_init(v3d, file_priv, &bin->base,
 				   v3d_job_free, args->in_sync_bcl);
 		if (ret) {
-			kfree(bin);
 			v3d_job_put(&render->base);
 			kfree(bin);
 			return ret;
@@ -886,12 +887,12 @@ v3d_gem_init(struct drm_device *dev)
 	 */
 	drm_mm_init(&v3d->mm, 1, pt_size / sizeof(u32) - 1);
 
-	v3d->pt = dma_alloc_wc(v3d->dev, pt_size,
+	v3d->pt = dma_alloc_wc(v3d->drm.dev, pt_size,
 			       &v3d->pt_paddr,
 			       GFP_KERNEL | __GFP_NOWARN | __GFP_ZERO);
 	if (!v3d->pt) {
 		drm_mm_takedown(&v3d->mm);
-		dev_err(v3d->dev,
+		dev_err(v3d->drm.dev,
 			"Failed to allocate page tables. "
 			"Please ensure you have CMA enabled.\n");
 		return -ENOMEM;
@@ -903,7 +904,7 @@ v3d_gem_init(struct drm_device *dev)
 	ret = v3d_sched_init(v3d);
 	if (ret) {
 		drm_mm_takedown(&v3d->mm);
-		dma_free_coherent(v3d->dev, 4096 * 1024, (void *)v3d->pt,
+		dma_free_coherent(v3d->drm.dev, 4096 * 1024, (void *)v3d->pt,
 				  v3d->pt_paddr);
 	}
 
@@ -925,5 +926,6 @@ v3d_gem_destroy(struct drm_device *dev)
 
 	drm_mm_takedown(&v3d->mm);
 
-	dma_free_coherent(v3d->dev, 4096 * 1024, (void *)v3d->pt, v3d->pt_paddr);
+	dma_free_coherent(v3d->drm.dev, 4096 * 1024, (void *)v3d->pt,
+			  v3d->pt_paddr);
 }

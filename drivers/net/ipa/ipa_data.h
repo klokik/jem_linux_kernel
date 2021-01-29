@@ -45,10 +45,10 @@
  * the IPA endpoint.
  */
 
-/* The maximum value returned by ipa_resource_group_count() */
-#define IPA_RESOURCE_GROUP_COUNT	4
+/* The maximum value returned by ipa_resource_group_{src,dst}_count() */
+#define IPA_RESOURCE_GROUP_SRC_MAX	5
+#define IPA_RESOURCE_GROUP_DST_MAX	5
 
-/** enum ipa_resource_type_src - source resource types */
 /**
  * struct gsi_channel_data - GSI channel configuration data
  * @tre_count:		number of TREs in the channel ring
@@ -80,18 +80,12 @@ struct gsi_channel_data {
 /**
  * struct ipa_endpoint_tx_data - configuration data for TX endpoints
  * @status_endpoint:	endpoint to which status elements are sent
- * @delay:		whether endpoint starts in delay mode
- *
- * Delay mode prevents a TX endpoint from transmitting anything, even if
- * commands have been presented to the hardware.  Once the endpoint exits
- * delay mode, queued transfer commands are sent.
  *
  * The @status_endpoint is only valid if the endpoint's @status_enable
  * flag is set.
  */
 struct ipa_endpoint_tx_data {
 	enum ipa_endpoint_name status_endpoint;
-	bool delay;
 };
 
 /**
@@ -115,6 +109,7 @@ struct ipa_endpoint_rx_data {
 
 /**
  * struct ipa_endpoint_config_data - IPA endpoint hardware configuration
+ * @resource_group:	resource group to assign endpoint to
  * @checksum:		whether checksum offload is enabled
  * @qmap:		whether endpoint uses QMAP protocol
  * @aggregation:	whether endpoint supports aggregation
@@ -125,6 +120,7 @@ struct ipa_endpoint_rx_data {
  * @rx:			RX-specific endpoint information (see above)
  */
 struct ipa_endpoint_config_data {
+	u32 resource_group;
 	bool checksum;
 	bool qmap;
 	bool aggregation;
@@ -212,7 +208,7 @@ struct ipa_resource_limits {
  */
 struct ipa_resource_src {
 	enum ipa_resource_type_src type;
-	struct ipa_resource_limits limits[IPA_RESOURCE_GROUP_COUNT];
+	struct ipa_resource_limits limits[IPA_RESOURCE_GROUP_SRC_MAX];
 };
 
 /**
@@ -222,7 +218,7 @@ struct ipa_resource_src {
  */
 struct ipa_resource_dst {
 	enum ipa_resource_type_dst type;
-	struct ipa_resource_limits limits[IPA_RESOURCE_GROUP_COUNT];
+	struct ipa_resource_limits limits[IPA_RESOURCE_GROUP_DST_MAX];
 };
 
 /**
@@ -245,15 +241,49 @@ struct ipa_resource_data {
 };
 
 /**
- * struct ipa_mem - IPA-local memory region description
- * @offset:		offset in IPA memory space to base of the region
- * @size:		size in bytes base of the region
- * @canary_count:	number of 32-bit "canary" values that precede region
+ * struct ipa_mem_data - description of IPA memory regions
+ * @local_count:	number of regions defined in the local[] array
+ * @local:		array of IPA-local memory region descriptors
+ * @imem_addr:		physical address of IPA region within IMEM
+ * @imem_size:		size in bytes of IPA IMEM region
+ * @smem_id:		item identifier for IPA region within SMEM memory
+ * @imem_size:		size in bytes of the IPA SMEM region
  */
 struct ipa_mem_data {
-	u32 offset;
-	u16 size;
-	u16 canary_count;
+	u32 local_count;
+	const struct ipa_mem *local;
+	u32 imem_addr;
+	u32 imem_size;
+	u32 smem_id;
+	u32 smem_size;
+};
+
+/** enum ipa_interconnect_id - IPA interconnect identifier */
+enum ipa_interconnect_id {
+	IPA_INTERCONNECT_MEMORY,
+	IPA_INTERCONNECT_IMEM,
+	IPA_INTERCONNECT_CONFIG,
+	IPA_INTERCONNECT_COUNT,		/* Last; not an interconnect */
+};
+
+/**
+ * struct ipa_interconnect_data - description of IPA interconnect rates
+ * @peak_rate:		Peak interconnect bandwidth (in 1000 byte/sec units)
+ * @average_rate:	Average interconnect bandwidth (in 1000 byte/sec units)
+ */
+struct ipa_interconnect_data {
+	u32 peak_rate;
+	u32 average_rate;
+};
+
+/**
+ * struct ipa_clock_data - description of IPA clock and interconnect rates
+ * @core_clock_rate:	Core clock rate (Hz)
+ * @interconnect:	Array of interconnect bandwidth parameters
+ */
+struct ipa_clock_data {
+	u32 core_clock_rate;
+	struct ipa_interconnect_data interconnect[IPA_INTERCONNECT_COUNT];
 };
 
 /**
@@ -270,8 +300,8 @@ struct ipa_data {
 	u32 endpoint_count;	/* # entries in endpoint_data[] */
 	const struct ipa_gsi_endpoint_data *endpoint_data;
 	const struct ipa_resource_data *resource_data;
-	u32 mem_count;		/* # entries in mem_data[] */
-	const struct ipa_mem *mem_data;
+	const struct ipa_mem_data *mem_data;
+	const struct ipa_clock_data *clock_data;
 };
 
 extern const struct ipa_data ipa_data_sdm845;

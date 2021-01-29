@@ -43,7 +43,7 @@ static inline void bnxt_link_bp_to_dl(struct bnxt *bp, struct devlink *dl)
 #define BNXT_NVM_CFG_VER_BITS		24
 #define BNXT_NVM_CFG_VER_BYTES		4
 
-#define BNXT_MSIX_VEC_MAX	1280
+#define BNXT_MSIX_VEC_MAX	512
 #define BNXT_MSIX_VEC_MIN_MAX	128
 
 enum bnxt_nvm_dir_type {
@@ -58,6 +58,12 @@ struct bnxt_dl_nvm_param {
 	u16 dir_type;
 	u16 nvm_num_bits;
 	u8 dl_num_bytes;
+};
+
+enum bnxt_dl_version_type {
+	BNXT_VERSION_FIXED,
+	BNXT_VERSION_RUNNING,
+	BNXT_VERSION_STORED,
 };
 
 void bnxt_devlink_health_report(struct bnxt *bp, unsigned long event);

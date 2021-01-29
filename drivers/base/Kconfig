@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: GPL-2.0
 menu "Generic Driver Options"
 
+config AUXILIARY_BUS
+	bool
+
 config UEVENT_HELPER
 	bool "Support for uevent helper"
 	help
@@ -149,8 +152,9 @@ config DEBUG_TEST_DRIVER_REMOVE
 	  test this functionality.
 
 config PM_QOS_KUNIT_TEST
-	bool "KUnit Test for PM QoS features"
+	bool "KUnit Test for PM QoS features" if !KUNIT_ALL_TESTS
 	depends on KUNIT=y
+	default KUNIT_ALL_TESTS
 
 config HMEM_REPORTING
 	bool

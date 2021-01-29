@@ -100,10 +100,10 @@ struct drm_fb_helper_funcs {
  * @funcs: driver callbacks for fb helper
  * @fbdev: emulated fbdev device info struct
  * @pseudo_palette: fake palette of 16 colors
- * @dirty_clip: clip rectangle used with deferred_io to accumulate damage to
- *              the screen buffer
- * @dirty_lock: spinlock protecting @dirty_clip
- * @dirty_work: worker used to flush the framebuffer
+ * @damage_clip: clip rectangle used with deferred_io to accumulate damage to
+ *                the screen buffer
+ * @damage_lock: spinlock protecting @damage_clip
+ * @damage_work: worker used to flush the framebuffer
  * @resume_work: worker used during resume if the console lock is already taken
  *
  * This is the main structure used by the fbdev helpers. Drivers supporting
@@ -131,9 +131,9 @@ struct drm_fb_helper {
 	const struct drm_fb_helper_funcs *funcs;
 	struct fb_info *fbdev;
 	u32 pseudo_palette[17];
-	struct drm_clip_rect dirty_clip;
-	spinlock_t dirty_lock;
-	struct work_struct dirty_work;
+	struct drm_clip_rect damage_clip;
+	spinlock_t damage_lock;
+	struct work_struct damage_work;
 	struct work_struct resume_work;
 
 	/**
@@ -269,7 +269,8 @@ int drm_fb_helper_debug_leave(struct fb_info *info);
 void drm_fb_helper_lastclose(struct drm_device *dev);
 void drm_fb_helper_output_poll_changed(struct drm_device *dev);
 
-int drm_fbdev_generic_setup(struct drm_device *dev, unsigned int preferred_bpp);
+void drm_fbdev_generic_setup(struct drm_device *dev,
+			     unsigned int preferred_bpp);
 #else
 static inline void drm_fb_helper_prepare(struct drm_device *dev,
 					struct drm_fb_helper *helper,
@@ -443,10 +444,9 @@ static inline void drm_fb_helper_output_poll_changed(struct drm_device *dev)
 {
 }
 
-static inline int
+static inline void
 drm_fbdev_generic_setup(struct drm_device *dev, unsigned int preferred_bpp)
 {
-	return 0;
 }
 
 #endif

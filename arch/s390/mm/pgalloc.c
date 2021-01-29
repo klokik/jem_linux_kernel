@@ -70,8 +70,11 @@ static void __crst_table_upgrade(void *arg)
 {
 	struct mm_struct *mm = arg;
 
-	if (current->active_mm == mm)
-		set_user_asce(mm);
+	/* change all active ASCEs to avoid the creation of new TLBs */
+	if (current->active_mm == mm) {
+		S390_lowcore.user_asce = mm->context.asce;
+		__ctl_load(S390_lowcore.user_asce, 7, 7);
+	}
 	__tlb_flush_local();
 }
 
@@ -102,7 +105,7 @@ int crst_table_upgrade(struct mm_struct *mm, unsigned long end)
 	spin_lock_bh(&mm->page_table_lock);
 
 	/*
-	 * This routine gets called with mmap_sem lock held and there is
+	 * This routine gets called with mmap_lock lock held and there is
 	 * no reason to optimize for the case of otherwise. However, if
 	 * that would ever change, the below check will let us know.
 	 */

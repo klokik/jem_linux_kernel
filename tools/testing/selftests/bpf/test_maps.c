@@ -789,19 +789,19 @@ static void test_sockmap(unsigned int tasks, void *data)
 	}
 
 	err = bpf_prog_detach(fd, BPF_SK_SKB_STREAM_PARSER);
-	if (err) {
+	if (!err) {
 		printf("Failed empty parser prog detach\n");
 		goto out_sockmap;
 	}
 
 	err = bpf_prog_detach(fd, BPF_SK_SKB_STREAM_VERDICT);
-	if (err) {
+	if (!err) {
 		printf("Failed empty verdict prog detach\n");
 		goto out_sockmap;
 	}
 
 	err = bpf_prog_detach(fd, BPF_SK_MSG_VERDICT);
-	if (err) {
+	if (!err) {
 		printf("Failed empty msg verdict prog detach\n");
 		goto out_sockmap;
 	}
@@ -1090,19 +1090,19 @@ static void test_sockmap(unsigned int tasks, void *data)
 		assert(status == 0);
 	}
 
-	err = bpf_prog_detach(map_fd_rx, __MAX_BPF_ATTACH_TYPE);
+	err = bpf_prog_detach2(parse_prog, map_fd_rx, __MAX_BPF_ATTACH_TYPE);
 	if (!err) {
 		printf("Detached an invalid prog type.\n");
 		goto out_sockmap;
 	}
 
-	err = bpf_prog_detach(map_fd_rx, BPF_SK_SKB_STREAM_PARSER);
+	err = bpf_prog_detach2(parse_prog, map_fd_rx, BPF_SK_SKB_STREAM_PARSER);
 	if (err) {
 		printf("Failed parser prog detach\n");
 		goto out_sockmap;
 	}
 
-	err = bpf_prog_detach(map_fd_rx, BPF_SK_SKB_STREAM_VERDICT);
+	err = bpf_prog_detach2(verdict_prog, map_fd_rx, BPF_SK_SKB_STREAM_VERDICT);
 	if (err) {
 		printf("Failed parser prog detach\n");
 		goto out_sockmap;
@@ -1223,9 +1223,10 @@ out_map_in_map:
 
 static void test_map_large(void)
 {
+
 	struct bigkey {
 		int a;
-		char b[116];
+		char b[4096];
 		long long c;
 	} key;
 	int fd, i, value;
@@ -1274,6 +1275,8 @@ static void __run_parallel(unsigned int tasks,
 	pid_t pid[tasks];
 	int i;
 
+	fflush(stdout);
+
 	for (i = 0; i < tasks; i++) {
 		pid[i] = fork();
 		if (pid[i] == 0) {
@@ -1309,22 +1312,58 @@ static void test_map_stress(void)
 #define DO_UPDATE 1
 #define DO_DELETE 0
 
+#define MAP_RETRIES 20
+
+static int map_update_retriable(int map_fd, const void *key, const void *value,
+				int flags, int attempts)
+{
+	while (bpf_map_update_elem(map_fd, key, value, flags)) {
+		if (!attempts || (errno != EAGAIN && errno != EBUSY))
+			return -errno;
+
+		usleep(1);
+		attempts--;
+	}
+
+	return 0;
+}
+
+static int map_delete_retriable(int map_fd, const void *key, int attempts)
+{
+	while (bpf_map_delete_elem(map_fd, key)) {
+		if (!attempts || (errno != EAGAIN && errno != EBUSY))
+			return -errno;
+
+		usleep(1);
+		attempts--;
+	}
+
+	return 0;
+}
+
 static void test_update_delete(unsigned int fn, void *data)
 {
 	int do_update = ((int *)data)[1];
 	int fd = ((int *)data)[0];
-	int i, key, value;
+	int i, key, value, err;
 
 	for (i = fn; i < MAP_SIZE; i += TASKS) {
 		key = value = i;
 
 		if (do_update) {
-			assert(bpf_map_update_elem(fd, &key, &value,
-						   BPF_NOEXIST) == 0);
-			assert(bpf_map_update_elem(fd, &key, &value,
-						   BPF_EXIST) == 0);
+			err = map_update_retriable(fd, &key, &value, BPF_NOEXIST, MAP_RETRIES);
+			if (err)
+				printf("error %d %d\n", err, errno);
+			assert(err == 0);
+			err = map_update_retriable(fd, &key, &value, BPF_EXIST, MAP_RETRIES);
+			if (err)
+				printf("error %d %d\n", err, errno);
+			assert(err == 0);
 		} else {
-			assert(bpf_map_delete_elem(fd, &key) == 0);
+			err = map_delete_retriable(fd, &key, MAP_RETRIES);
+			if (err)
+				printf("error %d %d\n", err, errno);
+			assert(err == 0);
 		}
 	}
 }
@@ -1394,23 +1433,25 @@ static void test_map_rdonly(void)
 
 	key = 1;
 	value = 1234;
-	/* Insert key=1 element. */
+	/* Try to insert key=1 element. */
 	assert(bpf_map_update_elem(fd, &key, &value, BPF_ANY) == -1 &&
 	       errno == EPERM);
 
-	/* Check that key=2 is not found. */
+	/* Check that key=1 is not found. */
 	assert(bpf_map_lookup_elem(fd, &key, &value) == -1 && errno == ENOENT);
 	assert(bpf_map_get_next_key(fd, &key, &value) == -1 && errno == ENOENT);
+
+	close(fd);
 }
 
-static void test_map_wronly(void)
+static void test_map_wronly_hash(void)
 {
 	int fd, key = 0, value = 0;
 
 	fd = bpf_create_map(BPF_MAP_TYPE_HASH, sizeof(key), sizeof(value),
 			    MAP_SIZE, map_flags | BPF_F_WRONLY);
 	if (fd < 0) {
-		printf("Failed to create map for read only test '%s'!\n",
+		printf("Failed to create map for write only test '%s'!\n",
 		       strerror(errno));
 		exit(1);
 	}
@@ -1420,9 +1461,49 @@ static void test_map_wronly(void)
 	/* Insert key=1 element. */
 	assert(bpf_map_update_elem(fd, &key, &value, BPF_ANY) == 0);
 
-	/* Check that key=2 is not found. */
+	/* Check that reading elements and keys from the map is not allowed. */
 	assert(bpf_map_lookup_elem(fd, &key, &value) == -1 && errno == EPERM);
 	assert(bpf_map_get_next_key(fd, &key, &value) == -1 && errno == EPERM);
+
+	close(fd);
+}
+
+static void test_map_wronly_stack_or_queue(enum bpf_map_type map_type)
+{
+	int fd, value = 0;
+
+	assert(map_type == BPF_MAP_TYPE_QUEUE ||
+	       map_type == BPF_MAP_TYPE_STACK);
+	fd = bpf_create_map(map_type, 0, sizeof(value), MAP_SIZE,
+			    map_flags | BPF_F_WRONLY);
+	/* Stack/Queue maps do not support BPF_F_NO_PREALLOC */
+	if (map_flags & BPF_F_NO_PREALLOC) {
+		assert(fd < 0 && errno == EINVAL);
+		return;
+	}
+	if (fd < 0) {
+		printf("Failed to create map '%s'!\n", strerror(errno));
+		exit(1);
+	}
+
+	value = 1234;
+	assert(bpf_map_update_elem(fd, NULL, &value, BPF_ANY) == 0);
+
+	/* Peek element should fail */
+	assert(bpf_map_lookup_elem(fd, NULL, &value) == -1 && errno == EPERM);
+
+	/* Pop element should fail */
+	assert(bpf_map_lookup_and_delete_elem(fd, NULL, &value) == -1 &&
+	       errno == EPERM);
+
+	close(fd);
+}
+
+static void test_map_wronly(void)
+{
+	test_map_wronly_hash();
+	test_map_wronly_stack_or_queue(BPF_MAP_TYPE_STACK);
+	test_map_wronly_stack_or_queue(BPF_MAP_TYPE_QUEUE);
 }
 
 static void prepare_reuseport_grp(int type, int map_fd, size_t map_elem_size,

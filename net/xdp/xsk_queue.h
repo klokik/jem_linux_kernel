@@ -9,11 +9,20 @@
 #include <linux/types.h>
 #include <linux/if_xdp.h>
 #include <net/xdp_sock.h>
+#include <net/xsk_buff_pool.h>
+
+#include "xsk.h"
 
 struct xdp_ring {
 	u32 producer ____cacheline_aligned_in_smp;
+	/* Hinder the adjacent cache prefetcher to prefetch the consumer
+	 * pointer if the producer pointer is touched and vice versa.
+	 */
+	u32 pad1 ____cacheline_aligned_in_smp;
 	u32 consumer ____cacheline_aligned_in_smp;
+	u32 pad2 ____cacheline_aligned_in_smp;
 	u32 flags;
+	u32 pad3 ____cacheline_aligned_in_smp;
 };
 
 /* Used for the RX and TX queues for packets */
@@ -29,14 +38,13 @@ struct xdp_umem_ring {
 };
 
 struct xsk_queue {
-	u64 chunk_mask;
-	u64 size;
 	u32 ring_mask;
 	u32 nentries;
 	u32 cached_prod;
 	u32 cached_cons;
 	struct xdp_ring *ring;
 	u64 invalid_descs;
+	u64 queue_empty_descs;
 };
 
 /* The structure of the shared state of the rings are the same as the
@@ -94,7 +102,7 @@ struct xsk_queue {
  * seen and read by the consumer.
  *
  * The consumer peeks into the ring to see if the producer has written
- * any new entries. If so, the producer can then read these entries
+ * any new entries. If so, the consumer can then read these entries
  * and when it is done reading them release them back to the producer
  * so that the producer can use these slots to fill in new entries.
  *
@@ -103,117 +111,116 @@ struct xsk_queue {
 
 /* Functions that read and validate content from consumer rings. */
 
-static inline bool xskq_cons_crosses_non_contig_pg(struct xdp_umem *umem,
-						   u64 addr,
-						   u64 length)
-{
-	bool cross_pg = (addr & (PAGE_SIZE - 1)) + length > PAGE_SIZE;
-	bool next_pg_contig =
-		(unsigned long)umem->pages[(addr >> PAGE_SHIFT)].addr &
-			XSK_NEXT_PG_CONTIG_MASK;
-
-	return cross_pg && !next_pg_contig;
-}
-
-static inline bool xskq_cons_is_valid_unaligned(struct xsk_queue *q,
-						u64 addr,
-						u64 length,
-						struct xdp_umem *umem)
-{
-	u64 base_addr = xsk_umem_extract_addr(addr);
-
-	addr = xsk_umem_add_offset_to_addr(addr);
-	if (base_addr >= q->size || addr >= q->size ||
-	    xskq_cons_crosses_non_contig_pg(umem, addr, length)) {
-		q->invalid_descs++;
-		return false;
-	}
-
-	return true;
-}
-
-static inline bool xskq_cons_is_valid_addr(struct xsk_queue *q, u64 addr)
-{
-	if (addr >= q->size) {
-		q->invalid_descs++;
-		return false;
-	}
-
-	return true;
-}
-
-static inline bool xskq_cons_read_addr(struct xsk_queue *q, u64 *addr,
-				       struct xdp_umem *umem)
+static inline bool xskq_cons_read_addr_unchecked(struct xsk_queue *q, u64 *addr)
 {
 	struct xdp_umem_ring *ring = (struct xdp_umem_ring *)q->ring;
 
-	while (q->cached_cons != q->cached_prod) {
+	if (q->cached_cons != q->cached_prod) {
 		u32 idx = q->cached_cons & q->ring_mask;
 
-		*addr = ring->desc[idx] & q->chunk_mask;
-
-		if (umem->flags & XDP_UMEM_UNALIGNED_CHUNK_FLAG) {
-			if (xskq_cons_is_valid_unaligned(q, *addr,
-							 umem->chunk_size_nohr,
-							 umem))
-				return true;
-			goto out;
-		}
-
-		if (xskq_cons_is_valid_addr(q, *addr))
-			return true;
-
-out:
-		q->cached_cons++;
+		*addr = ring->desc[idx];
+		return true;
 	}
 
 	return false;
 }
 
-static inline bool xskq_cons_is_valid_desc(struct xsk_queue *q,
-					   struct xdp_desc *d,
-					   struct xdp_umem *umem)
+static inline bool xp_aligned_validate_desc(struct xsk_buff_pool *pool,
+					    struct xdp_desc *desc)
 {
-	if (umem->flags & XDP_UMEM_UNALIGNED_CHUNK_FLAG) {
-		if (!xskq_cons_is_valid_unaligned(q, d->addr, d->len, umem))
-			return false;
+	u64 chunk, chunk_end;
 
-		if (d->len > umem->chunk_size_nohr || d->options) {
-			q->invalid_descs++;
-			return false;
-		}
-
-		return true;
-	}
-
-	if (!xskq_cons_is_valid_addr(q, d->addr))
+	chunk = xp_aligned_extract_addr(pool, desc->addr);
+	chunk_end = xp_aligned_extract_addr(pool, desc->addr + desc->len);
+	if (chunk != chunk_end)
 		return false;
 
-	if (((d->addr + d->len) & q->chunk_mask) != (d->addr & q->chunk_mask) ||
-	    d->options) {
+	if (chunk >= pool->addrs_cnt)
+		return false;
+
+	if (desc->options)
+		return false;
+	return true;
+}
+
+static inline bool xp_unaligned_validate_desc(struct xsk_buff_pool *pool,
+					      struct xdp_desc *desc)
+{
+	u64 addr, base_addr;
+
+	base_addr = xp_unaligned_extract_addr(desc->addr);
+	addr = xp_unaligned_add_offset_to_addr(desc->addr);
+
+	if (desc->len > pool->chunk_size)
+		return false;
+
+	if (base_addr >= pool->addrs_cnt || addr >= pool->addrs_cnt ||
+	    xp_desc_crosses_non_contig_pg(pool, addr, desc->len))
+		return false;
+
+	if (desc->options)
+		return false;
+	return true;
+}
+
+static inline bool xp_validate_desc(struct xsk_buff_pool *pool,
+				    struct xdp_desc *desc)
+{
+	return pool->unaligned ? xp_unaligned_validate_desc(pool, desc) :
+		xp_aligned_validate_desc(pool, desc);
+}
+
+static inline bool xskq_cons_is_valid_desc(struct xsk_queue *q,
+					   struct xdp_desc *d,
+					   struct xsk_buff_pool *pool)
+{
+	if (!xp_validate_desc(pool, d)) {
 		q->invalid_descs++;
 		return false;
 	}
-
 	return true;
 }
 
 static inline bool xskq_cons_read_desc(struct xsk_queue *q,
 				       struct xdp_desc *desc,
-				       struct xdp_umem *umem)
+				       struct xsk_buff_pool *pool)
 {
 	while (q->cached_cons != q->cached_prod) {
 		struct xdp_rxtx_ring *ring = (struct xdp_rxtx_ring *)q->ring;
 		u32 idx = q->cached_cons & q->ring_mask;
 
 		*desc = ring->desc[idx];
-		if (xskq_cons_is_valid_desc(q, desc, umem))
+		if (xskq_cons_is_valid_desc(q, desc, pool))
 			return true;
 
 		q->cached_cons++;
 	}
 
 	return false;
+}
+
+static inline u32 xskq_cons_read_desc_batch(struct xsk_queue *q,
+					    struct xdp_desc *descs,
+					    struct xsk_buff_pool *pool, u32 max)
+{
+	u32 cached_cons = q->cached_cons, nb_entries = 0;
+
+	while (cached_cons != q->cached_prod && nb_entries < max) {
+		struct xdp_rxtx_ring *ring = (struct xdp_rxtx_ring *)q->ring;
+		u32 idx = cached_cons & q->ring_mask;
+
+		descs[nb_entries] = ring->desc[idx];
+		if (unlikely(!xskq_cons_is_valid_desc(q, &descs[nb_entries], pool))) {
+			/* Skip the entry */
+			cached_cons++;
+			continue;
+		}
+
+		nb_entries++;
+		cached_cons++;
+	}
+
+	return nb_entries;
 }
 
 /* Functions for consumers */
@@ -237,44 +244,60 @@ static inline void xskq_cons_get_entries(struct xsk_queue *q)
 	__xskq_cons_peek(q);
 }
 
-static inline bool xskq_cons_has_entries(struct xsk_queue *q, u32 cnt)
+static inline u32 xskq_cons_nb_entries(struct xsk_queue *q, u32 max)
 {
 	u32 entries = q->cached_prod - q->cached_cons;
 
-	if (entries >= cnt)
-		return true;
+	if (entries >= max)
+		return max;
 
 	__xskq_cons_peek(q);
 	entries = q->cached_prod - q->cached_cons;
 
-	return entries >= cnt;
+	return entries >= max ? max : entries;
 }
 
-static inline bool xskq_cons_peek_addr(struct xsk_queue *q, u64 *addr,
-				       struct xdp_umem *umem)
+static inline bool xskq_cons_has_entries(struct xsk_queue *q, u32 cnt)
+{
+	return xskq_cons_nb_entries(q, cnt) >= cnt ? true : false;
+}
+
+static inline bool xskq_cons_peek_addr_unchecked(struct xsk_queue *q, u64 *addr)
 {
 	if (q->cached_prod == q->cached_cons)
 		xskq_cons_get_entries(q);
-	return xskq_cons_read_addr(q, addr, umem);
+	return xskq_cons_read_addr_unchecked(q, addr);
 }
 
 static inline bool xskq_cons_peek_desc(struct xsk_queue *q,
 				       struct xdp_desc *desc,
-				       struct xdp_umem *umem)
+				       struct xsk_buff_pool *pool)
 {
 	if (q->cached_prod == q->cached_cons)
 		xskq_cons_get_entries(q);
-	return xskq_cons_read_desc(q, desc, umem);
+	return xskq_cons_read_desc(q, desc, pool);
 }
 
+static inline u32 xskq_cons_peek_desc_batch(struct xsk_queue *q, struct xdp_desc *descs,
+					    struct xsk_buff_pool *pool, u32 max)
+{
+	u32 entries = xskq_cons_nb_entries(q, max);
+
+	return xskq_cons_read_desc_batch(q, descs, pool, entries);
+}
+
+/* To improve performance in the xskq_cons_release functions, only update local state here.
+ * Reflect this to global state when we get new entries from the ring in
+ * xskq_cons_get_entries() and whenever Rx or Tx processing are completed in the NAPI loop.
+ */
 static inline void xskq_cons_release(struct xsk_queue *q)
 {
-	/* To improve performance, only update local state here.
-	 * Reflect this to global state when we get new entries
-	 * from the ring in xskq_cons_get_entries() and whenever
-	 * Rx or Tx processing are completed in the NAPI loop.
-	 */
 	q->cached_cons++;
+}
+
+static inline void xskq_cons_release_n(struct xsk_queue *q, u32 cnt)
+{
+	q->cached_cons += cnt;
 }
 
 static inline bool xskq_cons_is_full(struct xsk_queue *q)
@@ -284,20 +307,36 @@ static inline bool xskq_cons_is_full(struct xsk_queue *q)
 		q->nentries;
 }
 
+static inline u32 xskq_cons_present_entries(struct xsk_queue *q)
+{
+	/* No barriers needed since data is not accessed */
+	return READ_ONCE(q->ring->producer) - READ_ONCE(q->ring->consumer);
+}
+
 /* Functions for producers */
 
-static inline bool xskq_prod_is_full(struct xsk_queue *q)
+static inline u32 xskq_prod_nb_free(struct xsk_queue *q, u32 max)
 {
 	u32 free_entries = q->nentries - (q->cached_prod - q->cached_cons);
 
-	if (free_entries)
-		return false;
+	if (free_entries >= max)
+		return max;
 
 	/* Refresh the local tail pointer */
 	q->cached_cons = READ_ONCE(q->ring->consumer);
 	free_entries = q->nentries - (q->cached_prod - q->cached_cons);
 
-	return !free_entries;
+	return free_entries >= max ? max : free_entries;
+}
+
+static inline bool xskq_prod_is_full(struct xsk_queue *q)
+{
+	return xskq_prod_nb_free(q, 1) ? false : true;
+}
+
+static inline void xskq_prod_cancel(struct xsk_queue *q)
+{
+	q->cached_prod--;
 }
 
 static inline int xskq_prod_reserve(struct xsk_queue *q)
@@ -320,6 +359,23 @@ static inline int xskq_prod_reserve_addr(struct xsk_queue *q, u64 addr)
 	/* A, matches D */
 	ring->desc[q->cached_prod++ & q->ring_mask] = addr;
 	return 0;
+}
+
+static inline u32 xskq_prod_reserve_addr_batch(struct xsk_queue *q, struct xdp_desc *descs,
+					       u32 max)
+{
+	struct xdp_umem_ring *ring = (struct xdp_umem_ring *)q->ring;
+	u32 nb_entries, i, cached_prod;
+
+	nb_entries = xskq_prod_nb_free(q, max);
+
+	/* A, matches D */
+	cached_prod = q->cached_prod;
+	for (i = 0; i < nb_entries; i++)
+		ring->desc[cached_prod++ & q->ring_mask] = descs[i].addr;
+	q->cached_prod = cached_prod;
+
+	return nb_entries;
 }
 
 static inline int xskq_prod_reserve_desc(struct xsk_queue *q,
@@ -379,11 +435,12 @@ static inline u64 xskq_nb_invalid_descs(struct xsk_queue *q)
 	return q ? q->invalid_descs : 0;
 }
 
-void xskq_set_umem(struct xsk_queue *q, u64 size, u64 chunk_mask);
+static inline u64 xskq_nb_queue_empty_descs(struct xsk_queue *q)
+{
+	return q ? q->queue_empty_descs : 0;
+}
+
 struct xsk_queue *xskq_create(u32 nentries, bool umem_queue);
 void xskq_destroy(struct xsk_queue *q_ops);
-
-/* Executed by the core when the entire UMEM gets freed */
-void xsk_reuseq_destroy(struct xdp_umem *umem);
 
 #endif /* _LINUX_XSK_QUEUE_H */

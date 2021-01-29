@@ -17,8 +17,8 @@
 #undef DEBUG
 
 #include <linux/string.h>
+#include <linux/pgtable.h>
 #include <asm/pgalloc.h>
-#include <asm/pgtable.h>
 #include <asm/kup.h>
 
 phys_addr_t memstart_addr __ro_after_init = (phys_addr_t)~0ull;
@@ -28,8 +28,8 @@ EXPORT_SYMBOL_GPL(kernstart_addr);
 unsigned long kernstart_virt_addr __ro_after_init = KERNELBASE;
 EXPORT_SYMBOL_GPL(kernstart_virt_addr);
 
-static bool disable_kuep = !IS_ENABLED(CONFIG_PPC_KUEP);
-static bool disable_kuap = !IS_ENABLED(CONFIG_PPC_KUAP);
+bool disable_kuep = !IS_ENABLED(CONFIG_PPC_KUEP);
+bool disable_kuap = !IS_ENABLED(CONFIG_PPC_KUAP);
 
 static int __init parse_nosmep(char *p)
 {
@@ -46,12 +46,6 @@ static int __init parse_nosmap(char *p)
 	return 0;
 }
 early_param("nosmap", parse_nosmap);
-
-void __ref setup_kup(void)
-{
-	setup_kuep(disable_kuep);
-	setup_kuap(disable_kuap);
-}
 
 #define CTOR(shift) static void ctor_##shift(void *addr) \
 {							\

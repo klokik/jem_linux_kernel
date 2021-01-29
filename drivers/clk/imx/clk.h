@@ -2,6 +2,7 @@
 #ifndef __MACH_IMX_CLK_H
 #define __MACH_IMX_CLK_H
 
+#include <linux/bits.h>
 #include <linux/spinlock.h>
 #include <linux/clk-provider.h>
 
@@ -9,7 +10,13 @@ extern spinlock_t imx_ccm_lock;
 
 void imx_check_clocks(struct clk *clks[], unsigned int count);
 void imx_check_clk_hws(struct clk_hw *clks[], unsigned int count);
+#ifndef MODULE
 void imx_register_uart_clocks(struct clk ** const clks[]);
+#else
+static inline void imx_register_uart_clocks(struct clk ** const clks[])
+{
+}
+#endif
 void imx_mmdc_mask_handshake(void __iomem *ccm_base, unsigned int chn);
 void imx_unregister_clocks(struct clk *clks[], unsigned int count);
 void imx_unregister_hw_clocks(struct clk_hw *hws[], unsigned int count);
@@ -59,9 +66,9 @@ extern struct imx_pll14xx_clk imx_1443x_dram_pll;
 	to_clk(imx_clk_hw_cpu(name, parent_name, div, mux, pll, step))
 
 #define clk_register_gate2(dev, name, parent_name, flags, reg, bit_idx, \
-				cgr_val, clk_gate_flags, lock, share_count) \
+				cgr_val, cgr_mask, clk_gate_flags, lock, share_count) \
 	to_clk(clk_hw_register_gate2(dev, name, parent_name, flags, reg, bit_idx, \
-				cgr_val, clk_gate_flags, lock, share_count))
+				cgr_val, cgr_mask, clk_gate_flags, lock, share_count))
 
 #define imx_clk_pllv3(type, name, parent_name, base, div_mask) \
 	to_clk(imx_clk_hw_pllv3(type, name, parent_name, base, div_mask))
@@ -131,9 +138,9 @@ struct clk *imx_clk_pll14xx(const char *name, const char *parent_name,
 #define imx_clk_pll14xx(name, parent_name, base, pll_clk) \
 	to_clk(imx_clk_hw_pll14xx(name, parent_name, base, pll_clk))
 
-struct clk_hw *imx_clk_hw_pll14xx(const char *name, const char *parent_name,
-				  void __iomem *base,
-				  const struct imx_pll14xx_clk *pll_clk);
+struct clk_hw *imx_dev_clk_hw_pll14xx(struct device *dev, const char *name,
+				const char *parent_name, void __iomem *base,
+				const struct imx_pll14xx_clk *pll_clk);
 
 struct clk_hw *imx_clk_hw_pllv1(enum imx_pllv1_type type, const char *name,
 		const char *parent, void __iomem *base);
@@ -189,7 +196,7 @@ struct clk_hw *imx_clk_hw_pllv4(const char *name, const char *parent_name,
 
 struct clk_hw *clk_hw_register_gate2(struct device *dev, const char *name,
 		const char *parent_name, unsigned long flags,
-		void __iomem *reg, u8 bit_idx, u8 cgr_val,
+		void __iomem *reg, u8 bit_idx, u8 cgr_val, u8 cgr_mask,
 		u8 clk_gate_flags, spinlock_t *lock,
 		unsigned int *share_count);
 
@@ -238,6 +245,13 @@ static inline struct clk *to_clk(struct clk_hw *hw)
 	if (IS_ERR_OR_NULL(hw))
 		return ERR_CAST(hw);
 	return hw->clk;
+}
+
+static inline struct clk_hw *imx_clk_hw_pll14xx(const char *name, const char *parent_name,
+				  void __iomem *base,
+				  const struct imx_pll14xx_clk *pll_clk)
+{
+	return imx_dev_clk_hw_pll14xx(NULL, name, parent_name, base, pll_clk);
 }
 
 static inline struct clk_hw *imx_clk_hw_fixed(const char *name, int rate)
@@ -310,6 +324,13 @@ static inline struct clk_hw *imx_clk_hw_gate(const char *name, const char *paren
 				    shift, 0, &imx_ccm_lock);
 }
 
+static inline struct clk_hw *imx_dev_clk_hw_gate(struct device *dev, const char *name,
+						const char *parent, void __iomem *reg, u8 shift)
+{
+	return clk_hw_register_gate(dev, name, parent, CLK_SET_RATE_PARENT, reg,
+				    shift, 0, &imx_ccm_lock);
+}
+
 static inline struct clk_hw *imx_clk_hw_gate_dis(const char *name, const char *parent,
 		void __iomem *reg, u8 shift)
 {
@@ -328,14 +349,14 @@ static inline struct clk_hw *imx_clk_hw_gate2(const char *name, const char *pare
 		void __iomem *reg, u8 shift)
 {
 	return clk_hw_register_gate2(NULL, name, parent, CLK_SET_RATE_PARENT, reg,
-			shift, 0x3, 0, &imx_ccm_lock, NULL);
+			shift, 0x3, 0x3, 0, &imx_ccm_lock, NULL);
 }
 
 static inline struct clk_hw *imx_clk_hw_gate2_flags(const char *name, const char *parent,
 		void __iomem *reg, u8 shift, unsigned long flags)
 {
 	return clk_hw_register_gate2(NULL, name, parent, flags | CLK_SET_RATE_PARENT, reg,
-			shift, 0x3, 0, &imx_ccm_lock, NULL);
+			shift, 0x3, 0x3, 0, &imx_ccm_lock, NULL);
 }
 
 static inline struct clk_hw *imx_clk_hw_gate2_shared(const char *name,
@@ -343,7 +364,7 @@ static inline struct clk_hw *imx_clk_hw_gate2_shared(const char *name,
 		unsigned int *share_count)
 {
 	return clk_hw_register_gate2(NULL, name, parent, CLK_SET_RATE_PARENT, reg,
-			shift, 0x3, 0, &imx_ccm_lock, share_count);
+			shift, 0x3, 0x3, 0, &imx_ccm_lock, share_count);
 }
 
 static inline struct clk_hw *imx_clk_hw_gate2_shared2(const char *name,
@@ -351,15 +372,25 @@ static inline struct clk_hw *imx_clk_hw_gate2_shared2(const char *name,
 		unsigned int *share_count)
 {
 	return clk_hw_register_gate2(NULL, name, parent, CLK_SET_RATE_PARENT |
-				  CLK_OPS_PARENT_ENABLE, reg, shift, 0x3, 0,
+				  CLK_OPS_PARENT_ENABLE, reg, shift, 0x3, 0x3, 0,
 				  &imx_ccm_lock, share_count);
+}
+
+static inline struct clk_hw *imx_dev_clk_hw_gate_shared(struct device *dev,
+				const char *name, const char *parent,
+				void __iomem *reg, u8 shift,
+				unsigned int *share_count)
+{
+	return clk_hw_register_gate2(NULL, name, parent, CLK_SET_RATE_PARENT |
+					CLK_OPS_PARENT_ENABLE, reg, shift, 0x1,
+					0x1, 0, &imx_ccm_lock, share_count);
 }
 
 static inline struct clk *imx_clk_gate2_cgr(const char *name,
 		const char *parent, void __iomem *reg, u8 shift, u8 cgr_val)
 {
 	return clk_register_gate2(NULL, name, parent, CLK_SET_RATE_PARENT, reg,
-			shift, cgr_val, 0, &imx_ccm_lock, NULL);
+			shift, cgr_val, 0x3, 0, &imx_ccm_lock, NULL);
 }
 
 static inline struct clk_hw *imx_clk_hw_gate3(const char *name, const char *parent,
@@ -387,7 +418,7 @@ static inline struct clk_hw *imx_clk_hw_gate4(const char *name, const char *pare
 {
 	return clk_hw_register_gate2(NULL, name, parent,
 			CLK_SET_RATE_PARENT | CLK_OPS_PARENT_ENABLE,
-			reg, shift, 0x3, 0, &imx_ccm_lock, NULL);
+			reg, shift, 0x3, 0x3, 0, &imx_ccm_lock, NULL);
 }
 
 static inline struct clk_hw *imx_clk_hw_gate4_flags(const char *name,
@@ -396,7 +427,7 @@ static inline struct clk_hw *imx_clk_hw_gate4_flags(const char *name,
 {
 	return clk_hw_register_gate2(NULL, name, parent,
 			flags | CLK_SET_RATE_PARENT | CLK_OPS_PARENT_ENABLE,
-			reg, shift, 0x3, 0, &imx_ccm_lock, NULL);
+			reg, shift, 0x3, 0x3, 0, &imx_ccm_lock, NULL);
 }
 
 #define imx_clk_gate4_flags(name, parent, reg, shift, flags) \
@@ -409,6 +440,15 @@ static inline struct clk_hw *imx_clk_hw_mux(const char *name, void __iomem *reg,
 	return clk_hw_register_mux(NULL, name, parents, num_parents,
 			CLK_SET_RATE_NO_REPARENT, reg, shift,
 			width, 0, &imx_ccm_lock);
+}
+
+static inline struct clk_hw *imx_dev_clk_hw_mux(struct device *dev,
+			const char *name, void __iomem *reg, u8 shift,
+			u8 width, const char * const *parents, int num_parents)
+{
+	return clk_hw_register_mux(dev, name, parents, num_parents,
+			CLK_SET_RATE_NO_REPARENT | CLK_SET_PARENT_GATE,
+			reg, shift, width, 0, &imx_ccm_lock);
 }
 
 static inline struct clk *imx_clk_mux2(const char *name, void __iomem *reg,
@@ -473,11 +513,25 @@ static inline struct clk_hw *imx_clk_hw_mux_flags(const char *name,
 				   reg, shift, width, 0, &imx_ccm_lock);
 }
 
+static inline struct clk_hw *imx_dev_clk_hw_mux_flags(struct device *dev,
+						  const char *name,
+						  void __iomem *reg, u8 shift,
+						  u8 width,
+						  const char * const *parents,
+						  int num_parents,
+						  unsigned long flags)
+{
+	return clk_hw_register_mux(dev, name, parents, num_parents,
+				   flags | CLK_SET_RATE_NO_REPARENT,
+				   reg, shift, width, 0, &imx_ccm_lock);
+}
+
 struct clk_hw *imx_clk_hw_cpu(const char *name, const char *parent_name,
 		struct clk *div, struct clk *mux, struct clk *pll,
 		struct clk *step);
 
 #define IMX_COMPOSITE_CORE	BIT(0)
+#define IMX_COMPOSITE_BUS	BIT(1)
 
 struct clk_hw *imx8m_clk_hw_composite_flags(const char *name,
 					    const char * const *parent_names,
@@ -485,6 +539,17 @@ struct clk_hw *imx8m_clk_hw_composite_flags(const char *name,
 					    void __iomem *reg,
 					    u32 composite_flags,
 					    unsigned long flags);
+
+#define imx8m_clk_hw_composite_bus(name, parent_names, reg)	\
+	imx8m_clk_hw_composite_flags(name, parent_names, \
+			ARRAY_SIZE(parent_names), reg, \
+			IMX_COMPOSITE_BUS, \
+			CLK_SET_RATE_NO_REPARENT | CLK_OPS_PARENT_ENABLE)
+
+#define imx8m_clk_hw_composite_bus_critical(name, parent_names, reg)	\
+	imx8m_clk_hw_composite_flags(name, parent_names, ARRAY_SIZE(parent_names), reg, \
+			IMX_COMPOSITE_BUS, \
+			CLK_SET_RATE_NO_REPARENT | CLK_OPS_PARENT_ENABLE | CLK_IS_CRITICAL)
 
 #define imx8m_clk_hw_composite_core(name, parent_names, reg)	\
 	imx8m_clk_hw_composite_flags(name, parent_names, \

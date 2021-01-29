@@ -31,10 +31,22 @@ properties:
   interrupts:
     maxItems: 1
 
+  "#interconnect-cells":
+    const: 0
+
   nvidia,memory-controller:
     $ref: /schemas/types.yaml#/definitions/phandle
     description:
       Phandle of the Memory Controller node.
+
+  core-supply:
+    description:
+      Phandle of voltage regulator of the SoC "core" power domain.
+
+  operating-points-v2:
+    description:
+      Should contain freqs and voltages and opp-supported-hw property, which
+      is a bitfield indicating SoC speedo ID mask.
 
 patternProperties:
   "^emc-timings-[0-9]+$":
@@ -56,10 +68,9 @@ patternProperties:
             maximum: 900000000
 
           nvidia,emc-auto-cal-interval:
-            allOf:
-              - $ref: /schemas/types.yaml#/definitions/uint32
             description:
               Pad calibration interval in microseconds.
+            $ref: /schemas/types.yaml#/definitions/uint32
             minimum: 0
             maximum: 2097151
 
@@ -79,11 +90,10 @@ patternProperties:
               Mode Register 0.
 
           nvidia,emc-zcal-cnt-long:
-            allOf:
-              - $ref: /schemas/types.yaml#/definitions/uint32
             description:
               Number of EMC clocks to wait before issuing any commands after
               sending ZCAL_MRW_CMD.
+            $ref: /schemas/types.yaml#/definitions/uint32
             minimum: 0
             maximum: 1023
 
@@ -98,12 +108,11 @@ patternProperties:
               FBIO "read" FIFO periodic resetting enabled.
 
           nvidia,emc-configuration:
-            allOf:
-              - $ref: /schemas/types.yaml#/definitions/uint32-array
             description:
               EMC timing characterization data. These are the registers
               (see section "18.13.2 EMC Registers" in the TRM) whose values
               need to be specified, according to the board documentation.
+            $ref: /schemas/types.yaml#/definitions/uint32-array
             items:
               - description: EMC_RC
               - description: EMC_RFC
@@ -217,6 +226,8 @@ required:
   - interrupts
   - clocks
   - nvidia,memory-controller
+  - "#interconnect-cells"
+  - operating-points-v2
 
 additionalProperties: false
 
@@ -229,6 +240,10 @@ examples:
         clocks = <&tegra_car 57>;
 
         nvidia,memory-controller = <&mc>;
+        operating-points-v2 = <&dvfs_opp_table>;
+        core-supply = <&vdd_core>;
+
+        #interconnect-cells = <0>;
 
         emc-timings-1 {
             nvidia,ram-code = <1>;

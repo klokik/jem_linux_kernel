@@ -25,7 +25,7 @@ struct ipa_gsi_endpoint_data;
 #define IPA_MTU			ETH_DATA_LEN
 
 enum ipa_endpoint_name {
-	IPA_ENDPOINT_AP_MODEM_TX	= 0,
+	IPA_ENDPOINT_AP_MODEM_TX,
 	IPA_ENDPOINT_MODEM_LAN_TX,
 	IPA_ENDPOINT_MODEM_COMMAND_TX,
 	IPA_ENDPOINT_AP_COMMAND_TX,
@@ -41,7 +41,6 @@ enum ipa_endpoint_name {
 
 /**
  * struct ipa_endpoint - IPA endpoint information
- * @client:	Client associated with the endpoint
  * @channel_id:	EP's GSI channel
  * @evt_ring_id: EP's GSI channel event ring
  */
@@ -75,8 +74,6 @@ void ipa_endpoint_modem_pause_all(struct ipa *ipa, bool enable);
 int ipa_endpoint_modem_exception_reset_all(struct ipa *ipa);
 
 int ipa_endpoint_skb_tx(struct ipa_endpoint *endpoint, struct sk_buff *skb);
-
-int ipa_endpoint_stop(struct ipa_endpoint *endpoint);
 
 void ipa_endpoint_exit_one(struct ipa_endpoint *endpoint);
 

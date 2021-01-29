@@ -82,18 +82,11 @@ static int panel_bridge_attach(struct drm_bridge *bridge,
 	drm_connector_attach_encoder(&panel_bridge->connector,
 					  bridge->encoder);
 
-	ret = drm_panel_attach(panel_bridge->panel, &panel_bridge->connector);
-	if (ret < 0)
-		return ret;
-
 	return 0;
 }
 
 static void panel_bridge_detach(struct drm_bridge *bridge)
 {
-	struct panel_bridge *panel_bridge = drm_bridge_to_panel_bridge(bridge);
-
-	drm_panel_detach(panel_bridge->panel);
 }
 
 static void panel_bridge_pre_enable(struct drm_bridge *bridge)
@@ -166,7 +159,7 @@ static const struct drm_bridge_funcs panel_bridge_bridge_funcs = {
  *
  * The connector type is set to @panel->connector_type, which must be set to a
  * known type. Calling this function with a panel whose connector type is
- * DRM_MODE_CONNECTOR_Unknown will return NULL.
+ * DRM_MODE_CONNECTOR_Unknown will return ERR_PTR(-EINVAL).
  *
  * See devm_drm_panel_bridge_add() for an automatically managed version of this
  * function.
@@ -174,7 +167,7 @@ static const struct drm_bridge_funcs panel_bridge_bridge_funcs = {
 struct drm_bridge *drm_panel_bridge_add(struct drm_panel *panel)
 {
 	if (WARN_ON(panel->connector_type == DRM_MODE_CONNECTOR_Unknown))
-		return NULL;
+		return ERR_PTR(-EINVAL);
 
 	return drm_panel_bridge_add_typed(panel, panel->connector_type);
 }
@@ -265,7 +258,7 @@ struct drm_bridge *devm_drm_panel_bridge_add(struct device *dev,
 					     struct drm_panel *panel)
 {
 	if (WARN_ON(panel->connector_type == DRM_MODE_CONNECTOR_Unknown))
-		return NULL;
+		return ERR_PTR(-EINVAL);
 
 	return devm_drm_panel_bridge_add_typed(dev, panel,
 					       panel->connector_type);
@@ -311,6 +304,7 @@ EXPORT_SYMBOL(devm_drm_panel_bridge_add_typed);
 
 /**
  * drm_panel_bridge_connector - return the connector for the panel bridge
+ * @bridge: The drm_bridge.
  *
  * drm_panel_bridge creates the connector.
  * This function gives external access to the connector.
