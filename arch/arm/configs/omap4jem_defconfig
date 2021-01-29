@@ -3438,7 +3438,7 @@ CONFIG_OMAP2_DSS_SLEEP_AFTER_VENC_RESET=y
 # OMAPDRM External Display Device Drivers
 #
 CONFIG_DRM_OMAP_PANEL_DSI_CM=y
-CONFIG_DRM_OMAP_PANEL_NT71391=y
+# CONFIG_DRM_OMAP_PANEL_NT71391 is not set
 # end of OMAPDRM External Display Device Drivers
 
 # CONFIG_DRM_TILCDC is not set
@@ -3728,7 +3728,7 @@ CONFIG_SND_SOC_OMAP_MCBSP=y
 #
 # CONFIG_SND_SOC_OMAP_ABE_TWL6040 is not set
 # CONFIG_SND_SOC_OMAP_HDMI is not set
-CONFIG_SND_SOC_OMAP_WM8962=y
+# CONFIG_SND_SOC_OMAP_WM8962 is not set
 # end of Audio support for Texas Instruments SoCs
 
 # CONFIG_SND_SOC_XILINX_I2S is not set
